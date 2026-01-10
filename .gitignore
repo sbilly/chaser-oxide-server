@@ -1,0 +1,56 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Testing
+_testing/
+_tests/
+
+# Documentation
+doc/
+
+# Logs
+logs/
+*.log
+
+# Docker
+docker-compose.override.yml
+
+# Python (测试相关)
+*.pyc
+__pycache__/
+.venv/
+venv/
+test-env/
+/chaser/  # 仅忽略项目根目录下的 chaser (测试生成)
+
+# gRPC 生成代码 (保留 protos/ 和 docs/examples/python/ 目录下的)
+/*_pb2.py
+/*_pb2_grpc.py
+/*_pb.go
+/*_grpc.pb.go
+!/protos/
+!/docs/examples/python/*_pb2.py
+!/docs/examples/python/*_pb2_grpc.py
+
+# 测试输出文件
+screenshot*.png
+test_result*.log
+test_client.py

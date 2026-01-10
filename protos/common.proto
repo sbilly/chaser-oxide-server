@@ -1,0 +1,260 @@
+// Copyright 2026 Chaser-Oxide Server
+// Common types and error definitions for the gRPC API
+syntax = "proto3";
+
+package chaser.oxide.v1;
+
+// ============= Common Messages =============
+
+// Empty message for requests with no parameters
+message Empty {}
+
+// Session identifiers for multi-tenancy
+message SessionID {
+    string browser_id = 1;  // Browser instance UUID
+    string page_id = 2;     // Page/tab UUID
+}
+
+// ============= Error Handling =============
+
+// Error codes for API responses
+enum ErrorCode {
+    ERROR_CODE_UNKNOWN = 0;
+    ERROR_CODE_INVALID_ARGUMENT = 1;      // Invalid request parameters
+    ERROR_CODE_NOT_FOUND = 2;             // Resource not found
+    ERROR_CODE_ALREADY_EXISTS = 3;        // Resource already exists
+    ERROR_CODE_PERMISSION_DENIED = 4;     // Permission denied
+    ERROR_CODE_RESOURCE_EXHAUSTED = 5;    // Resource limit reached
+    ERROR_CODE_FAILED_PRECONDITION = 6;   // Precondition failed
+    ERROR_CODE_ABORTED = 7;               // Operation aborted
+    ERROR_CODE_OUT_OF_RANGE = 8;          // Value out of range
+    ERROR_CODE_INTERNAL = 9;              // Internal server error
+    ERROR_CODE_BROWSER_CLOSED = 10;       // Browser is closed
+    ERROR_CODE_PAGE_CLOSED = 11;          // Page is closed
+    ERROR_CODE_ELEMENT_NOT_FOUND = 12;    // DOM element not found
+    ERROR_CODE_NAVIGATION_FAILED = 13;    // Navigation failed
+    ERROR_CODE_TIMEOUT = 14;              // Operation timeout
+    ERROR_CODE_EVALUATION_FAILED = 15;    // JavaScript evaluation failed
+}
+
+// Standard error response
+message Error {
+    ErrorCode code = 1;
+    string message = 2;
+    map<string, string> details = 3;  // Additional error details
+}
+
+// ============= Browser Configuration =============
+
+// Browser launch options
+message BrowserOptions {
+    // Path to Chrome/Chromium executable
+    string executable_path = 1;
+
+    // Additional command line arguments
+    repeated string args = 2;
+
+    // Headless mode (no visible UI)
+    bool headless = 3;
+
+    // Browser window dimensions
+    int32 window_width = 4;
+    int32 window_height = 5;
+
+    // User data directory for persistent session
+    string user_data_dir = 6;
+
+    // Proxy configuration
+    string proxy_server = 7;
+    string proxy_bypass_list = 8;
+
+    // Disable web security
+    bool disable_web_security = 9;
+
+    // Ignore certificate errors
+    bool ignore_certificate_errors = 10;
+
+    // Disable GPU acceleration
+    bool disable_gpu = 11;
+
+    // Disable extensions
+    bool disable_extensions = 12;
+
+    // Enable devtools
+    bool enable_devtools = 13;
+
+    // User agent override
+    string user_agent = 14;
+
+    // Language
+    string lang = 15;
+
+    // Timezone
+    string timezone = 16;
+}
+
+// Browser process information
+message BrowserInfo {
+    string browser_id = 1;
+    string executable_path = 2;
+    int32 pid = 3;                     // Process ID
+    bool headless = 4;
+    string user_agent = 5;
+    int64 launched_at = 6;             // Unix timestamp
+}
+
+// ============= Page Configuration =============
+
+// Page navigation options
+message NavigationOptions {
+    // Maximum navigation timeout in milliseconds
+    int32 timeout = 1;
+
+    // Wait until specific condition
+    enum LoadState {
+        LOAD_STATE_UNSPECIFIED = 0;
+        LOAD_STATE_LOAD = 1;           // Wait for 'load' event
+        LOAD_STATE_DOM_CONTENT_LOADED = 2;  // Wait for 'DOMContentLoaded'
+        LOAD_STATE_NETWORK_IDLE = 3;   // Wait for network to be idle
+        LOAD_STATE_NETWORK_ALMOST_IDLE = 4;  // Wait for network to be almost idle
+    }
+    LoadState wait_until = 2;
+
+    // Referer header
+    string referer = 3;
+}
+
+// Page screenshot options
+message ScreenshotOptions {
+    // Screenshot format
+    enum Format {
+        FORMAT_UNSPECIFIED = 0;
+        FORMAT_PNG = 1;
+        FORMAT_JPEG = 2;
+        FORMAT_WEBP = 3;
+    }
+    Format format = 1;
+
+    // Quality for JPEG/WEBP (0-100)
+    int32 quality = 2;
+
+    // Clip region
+    Rectangle clip = 3;
+
+    // Capture full page (including scrollable content)
+    bool full_page = 4;
+
+    // Omit background (for transparent PNG)
+    bool omit_background = 5;
+}
+
+// Rectangular region
+message Rectangle {
+    double x = 1;
+    double y = 2;
+    double width = 3;
+    double height = 4;
+}
+
+// Page viewport settings
+message Viewport {
+    int32 width = 1;
+    int32 height = 2;
+    double device_scale_factor = 3;  // Default: 1.0
+    bool mobile = 4;
+    int32 screen_width = 5;
+    int32 screen_height = 6;
+    int32 position_x = 7;
+    int32 position_y = 8;
+}
+
+// ============= Element Configuration =============
+
+// Element selector types
+enum SelectorType {
+    SELECTOR_TYPE_UNSPECIFIED = 0;
+    SELECTOR_TYPE_CSS = 1;            // CSS selector
+    SELECTOR_TYPE_XPATH = 2;          // XPath expression
+    SELECTOR_TYPE_TEXT = 3;           // Text content
+    SELECTOR_TYPE_ARIA = 4;           // ARIA label/role
+}
+
+// Element reference
+message ElementRef {
+    string page_id = 1;
+    string element_id = 2;            // Unique element identifier
+    SelectorType selector_type = 3;
+    string selector = 4;
+    int32 index = 5;                  // For multiple matches
+}
+
+// Element position for mouse interaction
+enum ElementPosition {
+    ELEMENT_POSITION_UNSPECIFIED = 0;
+    ELEMENT_POSITION_CENTER = 1;      // Click center of element
+    ELEMENT_POSITION_TOP_LEFT = 2;
+    ELEMENT_POSITION_TOP_RIGHT = 3;
+    ELEMENT_POSITION_BOTTOM_LEFT = 4;
+    ELEMENT_POSITION_BOTTOM_RIGHT = 5;
+    ELEMENT_POSITION_RANDOM = 6;      // Random position within element
+}
+
+// Mouse button types
+enum MouseButton {
+    MOUSE_BUTTON_UNSPECIFIED = 0;
+    MOUSE_BUTTON_LEFT = 1;
+    MOUSE_BUTTON_MIDDLE = 2;
+    MOUSE_BUTTON_RIGHT = 3;
+    MOUSE_BUTTON_BACK = 4;
+    MOUSE_BUTTON_FORWARD = 5;
+}
+
+// Keyboard modifier keys
+enum KeyModifier {
+    KEY_MODIFIER_UNSPECIFIED = 0;
+    KEY_MODIFIER_ALT = 1;
+    KEY_MODIFIER_CONTROL = 2;
+    KEY_MODIFIER_CONTROL_OR_META = 3;  // Control on Windows/Linux, Meta on Mac
+    KEY_MODIFIER_META = 4;
+    KEY_MODIFIER_SHIFT = 5;
+}
+
+// ============= Content Types =============
+
+// JavaScript evaluation result
+message EvaluationResult {
+    oneof response {
+        string string_value = 1;
+        int64 int_value = 2;
+        double double_value = 3;
+        bool bool_value = 4;
+        bytes binary_value = 5;       // For base64 encoded data
+        Value null_value = 6;         // Explicit null
+    }
+    string type = 7;                  // JavaScript type name
+    string class_name = 8;            // JavaScript class name (if object)
+}
+
+// Placeholder for null values
+message Value {}
+
+// Page content
+message PageContent {
+    string html = 1;
+    string text = 2;
+    repeated string scripts = 3;
+    repeated string stylesheets = 4;
+}
+
+// ============= Timing =============
+
+// Duration in milliseconds
+message Duration {
+    int64 value = 1;  // Duration in milliseconds
+}
+
+// Timestamp
+message Timestamp {
+    int64 seconds = 1;
+    int32 nanos = 2;
+}

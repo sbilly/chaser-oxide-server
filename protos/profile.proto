@@ -1,0 +1,312 @@
+// Copyright 2026 Chaser-Oxide Server
+// Stealth profile and fingerprint management service
+syntax = "proto3";
+
+package chaser.oxide.v1;
+
+import "common.proto";
+
+// ============= ProfileService =============
+// Manages browser fingerprint profiles for anti-detection
+service ProfileService {
+    // Create a new fingerprint profile
+    rpc CreateProfile(CreateProfileRequest) returns (CreateProfileResponse);
+
+    // Apply a profile to a page
+    rpc ApplyProfile(ApplyProfileRequest) returns (ApplyProfileResponse);
+
+    // Get predefined/preset profiles
+    rpc GetPresets(GetPresetsRequest) returns (GetPresetsResponse);
+
+    // Get active profile for a page
+    rpc GetActiveProfile(GetActiveProfileRequest) returns (GetActiveProfileResponse);
+
+    // Create custom profile from template
+    rpc CreateCustomProfile(CreateCustomProfileRequest) returns (CreateCustomProfileResponse);
+
+    // Randomize profile for uniqueness
+    rpc RandomizeProfile(RandomizeProfileRequest) returns (RandomizeProfileResponse);
+}
+
+// ============= Create Profile =============
+
+message CreateProfileRequest {
+    ProfileType type = 1;       // Use predefined type
+    CustomProfileOptions custom = 2;  // Or use custom options
+}
+
+message CreateProfileResponse {
+    oneof response {
+        Profile profile = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Profile Types =============
+
+enum ProfileType {
+    PROFILE_TYPE_UNSPECIFIED = 0;
+    PROFILE_TYPE_WINDOWS = 1;       // Windows fingerprint
+    PROFILE_TYPE_LINUX = 2;         // Linux fingerprint
+    PROFILE_TYPE_MACOS = 3;         // macOS fingerprint
+    PROFILE_TYPE_ANDROID = 4;       // Android mobile fingerprint
+    PROFILE_TYPE_IOS = 5;           // iOS mobile fingerprint
+    PROFILE_TYPE_CUSTOM = 6;        // Custom fingerprint
+}
+
+// ============= Profile Definition =============
+
+message Profile {
+    string profile_id = 1;
+    ProfileType type = 2;
+    Fingerprint fingerprint = 3;
+    ProfileOptions options = 4;
+    int64 created_at = 5;           // Unix timestamp
+}
+
+message Fingerprint {
+    // HTTP Headers
+    HTTPHeaders headers = 1;
+
+    // Navigator properties
+    NavigatorInfo navigator = 2;
+
+    // Screen properties
+    ScreenInfo screen = 3;
+
+    // Hardware properties
+    HardwareInfo hardware = 4;
+
+    // WebGL properties
+    WebGLInfo webgl = 5;
+
+    // Audio properties
+    AudioInfo audio = 6;
+
+    // Canvas properties
+    CanvasInfo canvas = 7;
+
+    // Timezone and locale
+    string timezone = 8;
+    string locale = 9;
+    repeated string languages = 10;
+
+    // Permissions
+    Permissions permissions = 11;
+}
+
+message HTTPHeaders {
+    string user_agent = 1;
+    string accept_language = 2;
+    string accept_encoding = 3;
+    string sec_ch_ua = 4;          // Sec-CH-UA header
+    string sec_ch_ua_platform = 5;
+    string sec_ch_ua_mobile = 6;
+    string sec_ch_ua_arch = 7;
+}
+
+message NavigatorInfo {
+    string platform = 1;           // Win32, Linux, MacIntel, etc.
+    string vendor = 2;             // Usually Google Inc.
+    string product = 3;            // Gecko
+    string app_version = 4;
+    string app_name = 5;           // Netscape
+    string app_code_name = 6;      // Mozilla
+    bool hardware_concurrency = 7; // CPU cores
+    int32 device_memory = 8;       // RAM in GB
+    string language = 9;
+    repeated string languages = 10;
+    bool do_not_track = 11;
+    string cookie_enabled = 12;
+    bool pdf_viewer_enabled = 13;
+    bool webdriver = 14;           // Should be false for stealth
+}
+
+message ScreenInfo {
+    int32 width = 1;
+    int32 height = 2;
+    int32 avail_width = 3;
+    int32 avail_height = 4;
+    int32 color_depth = 5;
+    int32 pixel_depth = 6;
+    int32 top = 7;
+    int32 left = 8;
+    double device_pixel_ratio = 9;
+    bool orientation = 10;         // true=portrait, false=landscape
+}
+
+message HardwareInfo {
+    int32 cpu_cores = 1;
+    int32 device_memory = 2;       // RAM in GB
+    string gpu_vendor = 3;
+    string gpu_renderer = 4;
+}
+
+message WebGLInfo {
+    string vendor = 1;             // GPU vendor
+    string renderer = 2;           // GPU renderer
+    string version = 3;            // WebGL version
+    string shading_language_version = 4;
+    int32 max_texture_size = 5;
+    repeated string extensions = 6;
+    bool webgl2 = 7;               // WebGL 2.0 support
+}
+
+message AudioInfo {
+    int32 context_count = 1;       // Number of AudioContexts
+    string audio_context = 2;      // BaseAudioContext fingerprint
+}
+
+message CanvasInfo {
+    bool canvas_fingerprint = 1;   // Canvas fingerprinting detection
+    string canvas_renderer = 2;
+}
+
+message Permissions {
+    bool geolocation = 1;
+    bool notifications = 2;
+    bool camera = 3;
+    bool microphone = 4;
+    bool midi = 5;
+    bool bluetooth = 6;
+    bool usb = 7;
+}
+
+message ProfileOptions {
+    // Script injection options
+    bool inject_navigator = 1;     // Inject navigator properties
+    bool inject_screen = 2;        // Inject screen properties
+    bool inject_webgl = 3;         // Inject WebGL properties
+    bool inject_canvas = 4;        // Inject canvas protection
+    bool inject_audio = 5;         // Inject audio fingerprint protection
+
+    // Transport layer stealth
+    bool neutralize_utility_world = 6;  // Neutralize utility world names
+    bool use_isolated_world = 7;        // Use Page.createIsolatedWorld
+
+    // Additional options
+    bool randomize_metrics = 8;    // Randomize timing metrics
+    bool prevent_detection = 9;    // Prevent bot detection scripts
+}
+
+// ============= Custom Profile Options =============
+
+message CustomProfileOptions {
+    // User agent
+    string user_agent = 1;
+
+    // Platform
+    string platform = 2;
+
+    // Screen
+    int32 screen_width = 3;
+    int32 screen_height = 4;
+    double device_pixel_ratio = 5;
+
+    // Hardware
+    int32 cpu_cores = 6;
+    int32 device_memory = 7;
+
+    // Language
+    string locale = 8;
+    repeated string languages = 9;
+    string timezone = 10;
+
+    // WebGL
+    string webgl_vendor = 11;
+    string webgl_renderer = 12;
+
+    // Navigator
+    string navigator_vendor = 13;
+    string navigator_product = 14;
+}
+
+// ============= Apply Profile =============
+
+message ApplyProfileRequest {
+    string page_id = 1;
+    string profile_id = 2;         // Profile to apply
+    bool override_existing = 3;    // Override existing profile
+}
+
+message ApplyProfileResponse {
+    oneof response {
+        ApplyProfileResult result = 1;
+        Error error = 2;
+    }
+}
+
+message ApplyProfileResult {
+    string page_id = 1;
+    string profile_id = 2;
+    bool success = 3;
+    repeated string applied_features = 4;  // Features that were applied
+}
+
+// ============= Get Presets =============
+
+message GetPresetsRequest {
+    ProfileType type = 1;          // Filter by type (optional)
+}
+
+message GetPresetsResponse {
+    oneof response {
+        PresetProfiles presets = 1;
+        Error error = 2;
+    }
+}
+
+message PresetProfiles {
+    repeated Profile presets = 1;
+}
+
+// ============= Get Active Profile =============
+
+message GetActiveProfileRequest {
+    string page_id = 1;
+}
+
+message GetActiveProfileResponse {
+    oneof response {
+        Profile profile = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Create Custom Profile =============
+
+message CreateCustomProfileRequest {
+    string profile_name = 1;
+    ProfileType template = 2;      // Base template to customize
+    CustomProfileOptions options = 3;
+    ProfileOptions profile_options = 4;
+}
+
+message CreateCustomProfileResponse {
+    oneof response {
+        Profile profile = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Randomize Profile =============
+
+message RandomizeProfileRequest {
+    ProfileType type = 1;          // Base type to randomize
+    RandomizationOptions options = 2;
+}
+
+message RandomizationOptions {
+    bool randomize_screen = 1;     // Randomize screen resolution within type
+    bool randomize_timezone = 2;   // Randomize timezone within region
+    bool randomize_language = 3;   // Randomize language variant
+    bool randomize_webgl = 4;      // Randomize WebGL details
+    double entropy = 5;            // Randomization entropy (0.0-1.0)
+}
+
+message RandomizeProfileResponse {
+    oneof response {
+        Profile profile = 1;
+        Error error = 2;
+    }
+}

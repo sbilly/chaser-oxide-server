@@ -1,0 +1,355 @@
+// Copyright 2026 Chaser-Oxide Server
+// Event streaming service for real-time browser events
+syntax = "proto3";
+
+package chaser.oxide.v1;
+
+// ============= Common Enumerations =============
+
+// Log level for console events
+enum LogLevel {
+    LOG_LEVEL_UNSPECIFIED = 0;
+    LOG_LEVEL_LOG = 1;
+    LOG_LEVEL_DEBUG = 2;
+    LOG_LEVEL_INFO = 3;
+    LOG_LEVEL_WARN = 4;
+    LOG_LEVEL_ERROR = 5;
+}
+
+// ============= EventService =============
+// Provides real-time event streaming using bidirectional RPC
+service EventService {
+    // Subscribe to browser/page events
+    // Client sends subscription requests, server streams events back
+    rpc Subscribe(stream SubscribeRequest) returns (stream Event);
+}
+
+// ============= Subscription Management =============
+
+message SubscribeRequest {
+    // Subscription action
+    enum Action {
+        ACTION_UNSPECIFIED = 0;
+        ACTION_SUBSCRIBE = 1;      // Subscribe to events
+        ACTION_UNSUBSCRIBE = 2;    // Unsubscribe from events
+        ACTION_LIST_SUBSCRIPTIONS = 3;  // List active subscriptions
+        ACTION_PING = 4;           // Keep-alive ping
+    }
+
+    Action action = 1;
+
+    // Subscription configuration
+    Subscription subscription = 2;
+
+    // Client-provided subscription ID (optional, auto-generated if not provided)
+    string subscription_id = 3;
+}
+
+message Subscription {
+    // What to subscribe to
+    oneof target {
+        string browser_id = 1;     // All events for a browser
+        string page_id = 2;        // All events for a page
+        EventType event_type = 3;  // Specific event type globally
+    }
+
+    // Event types to subscribe to (empty = all)
+    repeated EventType event_types = 4;
+
+    // Subscription filters
+    EventFilter filter = 5;
+
+    // Subscription options
+    SubscriptionOptions options = 6;
+}
+
+message EventFilter {
+    // Filter by URL pattern
+    string url_pattern = 1;
+
+    // Filter by request/response status
+    repeated int32 status_codes = 2;
+
+    // Filter by resource type
+    repeated string resource_types = 3;  // document, stylesheet, image, etc.
+
+    // Filter by console log level
+    repeated LogLevel log_levels = 4;
+
+    // Custom JavaScript filter expression
+    string js_expression = 5;
+}
+
+message SubscriptionOptions {
+    // Include event details
+    bool include_details = 1;
+
+    // Include stack traces
+    bool include_stack_trace = 2;
+
+    // Throttle events (ms between events)
+    int32 throttle_ms = 3;
+
+    // Maximum buffer size
+    int32 buffer_size = 4;
+
+    // Enable event batching
+    bool batch_events = 5;
+
+    // Batch size
+    int32 batch_size = 6;
+
+    // Batch timeout (ms)
+    int32 batch_timeout = 7;
+}
+
+message SubscribeResponse {
+    // Response to subscription actions
+    enum ResponseType {
+        RESPONSE_TYPE_UNSPECIFIED = 0;
+        RESPONSE_TYPE_SUCCESS = 1;
+        RESPONSE_TYPE_ERROR = 2;
+        RESPONSE_TYPE_PONG = 3;
+        RESPONSE_TYPE_SUBSCRIPTIONS = 4;
+    }
+
+    ResponseType type = 1;
+
+    // Subscription ID for successful subscriptions
+    string subscription_id = 2;
+
+    // Error message (if any)
+    string error_message = 3;
+
+    // List of active subscriptions (for ACTION_LIST_SUBSCRIPTIONS)
+    repeated SubscriptionInfo subscriptions = 4;
+}
+
+message SubscriptionInfo {
+    string subscription_id = 1;
+    string target = 2;            // browser_id or page_id
+    repeated EventType event_types = 3;
+    int64 subscribed_at = 4;      // Unix timestamp
+}
+
+// ============= Event Types =============
+
+enum EventType {
+    EVENT_TYPE_UNSPECIFIED = 0;
+
+    // Page lifecycle events
+    EVENT_TYPE_PAGE_CREATED = 1;
+    EVENT_TYPE_PAGE_LOADED = 2;
+    EVENT_TYPE_PAGE_NAVIGATED = 3;
+    EVENT_TYPE_PAGE_CLOSED = 4;
+    EVENT_TYPE_PAGE_ERROR = 5;
+    EVENT_TYPE_DOM_CONTENT_LOADED = 6;
+    EVENT_TYPE_LOAD_TIMEOUT = 7;
+
+    // Frame events
+    EVENT_TYPE_FRAME_ATTACHED = 8;
+    EVENT_TYPE_FRAME_DETACHED = 9;
+    EVENT_TYPE_FRAME_NAVIGATED = 10;
+
+    // Console events
+    EVENT_TYPE_CONSOLE_LOG = 11;
+    EVENT_TYPE_CONSOLE_DEBUG = 12;
+    EVENT_TYPE_CONSOLE_INFO = 13;
+    EVENT_TYPE_CONSOLE_WARN = 14;
+    EVENT_TYPE_CONSOLE_ERROR = 15;
+    EVENT_TYPE_CONSOLE_EXCEPTION = 16;
+
+    // Network events
+    EVENT_TYPE_REQUEST_SENT = 17;
+    EVENT_TYPE_RESPONSE_RECEIVED = 18;
+    EVENT_TYPE_REQUEST_FAILED = 19;
+    EVENT_TYPE_REQUEST_FINISHED = 20;
+
+    // JavaScript events
+    EVENT_TYPE_JS_EXCEPTION = 21;
+    EVENT_TYPE_JS_PROMISE_REJECTION = 22;
+    EVENT_TYPE_JS_EXECUTION = 23;
+
+    // Dialog events
+    EVENT_TYPE_DIALOG_OPENED = 24;
+    EVENT_TYPE_DIALOG_CLOSED = 25;
+
+    // Worker events
+    EVENT_TYPE_WORKER_CREATED = 26;
+    EVENT_TYPE_WORKER_TERMINATED = 27;
+
+    // Browser events
+    EVENT_TYPE_BROWSER_CRASHED = 28;
+    EVENT_TYPE_BROWSER_DISCONNECTED = 29;
+}
+
+// ============= Base Event =============
+
+message Event {
+    // Event metadata
+    EventMetadata metadata = 1;
+
+    // Event-specific data
+    oneof data {
+        PageEvent page_event = 2;
+        FrameEvent frame_event = 3;
+        ConsoleEvent console_event = 4;
+        NetworkEvent network_event = 5;
+        JavaScriptEvent js_event = 6;
+        DialogEvent dialog_event = 7;
+        WorkerEvent worker_event = 8;
+        BrowserEvent browser_event = 9;
+    }
+
+    // Subscription ID that triggered this event
+    string subscription_id = 10;
+}
+
+message EventMetadata {
+    string event_id = 1;          // Unique event ID
+    EventType type = 2;
+    int64 timestamp = 3;          // Unix timestamp (ms)
+    string browser_id = 4;
+    string page_id = 5;
+    string frame_id = 6;          // Optional
+    map<string, string> extra = 7;  // Additional metadata
+}
+
+// ============= Page Events =============
+
+message PageEvent {
+    enum PageEventType {
+        PAGE_EVENT_TYPE_UNSPECIFIED = 0;
+        PAGE_EVENT_TYPE_CREATED = 1;
+        PAGE_EVENT_TYPE_LOADED = 2;
+        PAGE_EVENT_TYPE_NAVIGATED = 3;
+        PAGE_EVENT_TYPE_CLOSED = 4;
+        PAGE_EVENT_TYPE_ERROR = 5;
+        PAGE_EVENT_TYPE_DOM_CONTENT_LOADED = 6;
+        PAGE_EVENT_TYPE_LOAD_TIMEOUT = 7;
+    }
+
+    PageEventType event_type = 1;
+    string url = 2;
+    string title = 3;
+    int32 status_code = 4;        // For navigation events
+    string error_message = 5;     // For error events
+    int64 load_time = 6;          // Page load time in ms
+}
+
+// ============= Frame Events =============
+
+message FrameEvent {
+    enum FrameEventType {
+        FRAME_EVENT_TYPE_UNSPECIFIED = 0;
+        FRAME_EVENT_TYPE_ATTACHED = 1;
+        FRAME_EVENT_TYPE_DETACHED = 2;
+        FRAME_EVENT_TYPE_NAVIGATED = 3;
+    }
+
+    FrameEventType event_type = 1;
+    string frame_id = 2;
+    string parent_frame_id = 3;   // Optional
+    string url = 4;
+    string name = 5;              // Frame name/ID
+}
+
+// ============= Console Events =============
+
+message ConsoleEvent {
+    LogLevel level = 1;
+    repeated string args = 2;      // Console arguments
+    string url = 3;                // Script URL
+    int32 line = 4;                // Line number
+    int32 column = 5;              // Column number
+    string stack_trace = 6;
+}
+
+// ============= Network Events =============
+
+message NetworkEvent {
+    enum NetworkEventType {
+        NETWORK_EVENT_TYPE_UNSPECIFIED = 0;
+        NETWORK_EVENT_TYPE_SENT = 1;
+        NETWORK_EVENT_TYPE_RECEIVED = 2;
+        NETWORK_EVENT_TYPE_FAILED = 3;
+        NETWORK_EVENT_TYPE_FINISHED = 4;
+    }
+
+    NetworkEventType event_type = 1;
+    string request_id = 2;
+    string url = 3;
+    string method = 4;             // GET, POST, etc.
+    map<string, string> headers = 5;
+    int32 status_code = 6;         // For response events
+    bool from_cache = 7;           // For response events
+    string resource_type = 8;      // document, stylesheet, image, etc.
+    int64 request_size = 9;        // Bytes
+    int64 response_size = 10;      // Bytes
+    double duration = 11;          // Request duration in seconds
+    double timing = 12;            // Timing information
+}
+
+// ============= JavaScript Events =============
+
+message JavaScriptEvent {
+    enum JSEventType {
+        JS_EVENT_TYPE_UNSPECIFIED = 0;
+        JS_EVENT_TYPE_EXCEPTION = 1;
+        JS_EVENT_TYPE_PROMISE_REJECTION = 2;
+        JS_EVENT_TYPE_EXECUTION = 3;
+    }
+
+    JSEventType event_type = 1;
+    string message = 2;
+    string url = 3;
+    int32 line = 4;
+    int32 column = 5;
+    string stack_trace = 6;
+    string exception_id = 7;       // For promise rejections
+}
+
+// ============= Dialog Events =============
+
+message DialogEvent {
+    enum DialogType {
+        DIALOG_TYPE_UNSPECIFIED = 0;
+        DIALOG_TYPE_ALERT = 1;
+        DIALOG_TYPE_CONFIRM = 2;
+        DIALOG_TYPE_PROMPT = 3;
+        DIALOG_TYPE_BEFORE_UNLOAD = 4;
+    }
+
+    DialogType type = 1;
+    string message = 2;
+    bool default_prompt = 3;       // For prompt dialogs
+}
+
+// ============= Worker Events =============
+
+message WorkerEvent {
+    enum WorkerEventType {
+        WORKER_EVENT_TYPE_UNSPECIFIED = 0;
+        WORKER_EVENT_TYPE_CREATED = 1;
+        WORKER_EVENT_TYPE_TERMINATED = 2;
+    }
+
+    WorkerEventType event_type = 1;
+    string worker_id = 2;
+    string url = 3;
+    string worker_type = 4;        // dedicated, shared, service
+}
+
+// ============= Browser Events =============
+
+message BrowserEvent {
+    enum BrowserEventType {
+        BROWSER_EVENT_TYPE_UNSPECIFIED = 0;
+        BROWSER_EVENT_TYPE_CRASHED = 1;
+        BROWSER_EVENT_TYPE_DISCONNECTED = 2;
+    }
+
+    BrowserEventType event_type = 1;
+    string error_message = 2;
+    int32 exit_code = 3;           // For crash events
+}

@@ -1,0 +1,55 @@
+# Rust formatter configuration
+
+# Maximum line width
+max_width = 100
+
+# Use spaces instead of tabs
+hard_tabs = false
+
+# Number of spaces per tab
+tab_spaces = 4
+
+# Line ending style (Unix or Windows)
+newline_style = "Unix"
+
+# Use small heuristics for formatting
+use_small_heuristics = "Default"
+
+# Import granularity
+imports_granularity = "Crate"
+
+# Group imports
+group_imports = "StdExternalCrate"
+
+# Reorder import items
+reorder_imports = true
+
+# Reorder modules
+reorder_modules = true
+
+# Remove nested parens
+remove_nested_parens = true
+
+# Wrap comments at max_width
+wrap_comments = false
+
+# Comment width
+comment_width = 100
+
+# Format code in doc comments
+format_code_in_doc_comments = true
+
+# Normalize comments
+normalize_comments = true
+
+# Normalize doc attributes
+normalize_doc_attributes = true
+
+# Format strings
+format_strings = false
+
+# Use field init shorthand
+use_field_init_shorthand = true
+
+# Use try shorthand
+use_try_shorthand = true

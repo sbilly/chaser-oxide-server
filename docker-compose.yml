@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  chaser-oxide:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: chaser-oxide-server:latest
+    container_name: chaser-oxide-server
+
+    ports:
+      - "50051:50051"
+
+    environment:
+      # Server configuration
+      - RUST_LOG=info
+      - CHASER_HOST=0.0.0.0
+      - CHASER_PORT=50051
+
+      # Browser configuration
+      - CHASER_HEADLESS=true
+      - CHASER_BROWSER_PATH=/usr/bin/chromium
+
+      # Security
+      - CHASER_ENABLE_STEALTH=true
+
+    volumes:
+      # Persist data
+      - ./data:/app/data
+      # Optional: Mount custom browser profiles
+      # - ./browser_profile:/app/browser_profile
+
+    restart: unless-stopped
+
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "chaser-oxide-server"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Add monitoring service
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  #   ports:
+  #     - "9090:9090"
+
+networks:
+  default:
+    name: chaser-network

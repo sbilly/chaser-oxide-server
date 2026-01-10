@@ -1,0 +1,445 @@
+// Copyright 2026 Chaser-Oxide Server
+// Element interaction service
+syntax = "proto3";
+
+package chaser.oxide.v1;
+
+import "common.proto";
+
+// ============= ElementService =============
+// Handles DOM element finding and interaction
+service ElementService {
+    // Find a single element
+    rpc FindElement(FindElementRequest) returns (FindElementResponse);
+
+    // Find multiple elements
+    rpc FindElements(FindElementsRequest) returns (FindElementsResponse);
+
+    // Click on an element
+    rpc Click(ClickRequest) returns (ClickResponse);
+
+    // Type text into an element
+    rpc Type(TypeRequest) returns (TypeResponse);
+
+    // Fill a form element
+    rpc Fill(FillRequest) returns (FillResponse);
+
+    // Get element attribute
+    rpc GetAttribute(GetAttributeRequest) returns (GetAttributeResponse);
+
+    // Get multiple attributes
+    rpc GetAttributes(GetAttributesRequest) returns (GetAttributesResponse);
+
+    // Get element text content
+    rpc GetText(GetTextRequest) returns (GetTextResponse);
+
+    // Get inner HTML
+    rpc GetHTML(GetHTMLRequest) returns (GetHTMLResponse);
+
+    // Hover over an element
+    rpc Hover(HoverRequest) returns (HoverResponse);
+
+    // Focus on an element
+    rpc Focus(FocusRequest) returns (FocusResponse);
+
+    // Select option(s) from a dropdown
+    rpc SelectOption(SelectOptionRequest) returns (SelectOptionResponse);
+
+    // Upload file
+    rpc UploadFile(UploadFileRequest) returns (UploadFileResponse);
+
+    // Scroll element into view
+    rpc ScrollIntoView(ScrollIntoViewRequest) returns (ScrollIntoViewResponse);
+
+    // Get element bounding box
+    rpc GetBoundingBox(GetBoundingBoxRequest) returns (GetBoundingBoxResponse);
+
+    // Check if element is visible
+    rpc IsVisible(IsVisibleRequest) returns (IsVisibleResponse);
+
+    // Check if element is enabled
+    rpc IsEnabled(IsEnabledRequest) returns (IsEnabledResponse);
+
+    // Wait for element
+    rpc WaitForElement(WaitForElementRequest) returns (WaitForElementResponse);
+
+    // Get element properties
+    rpc GetProperties(GetPropertiesRequest) returns (GetPropertiesResponse);
+
+    // Press key on element
+    rpc PressKey(PressKeyRequest) returns (PressKeyResponse);
+
+    // Drag and drop
+    rpc DragAndDrop(DragAndDropRequest) returns (DragAndDropResponse);
+}
+
+// ============= Find Element =============
+
+message FindElementRequest {
+    string page_id = 1;
+    SelectorType selector_type = 2;
+    string selector = 3;
+    bool wait_for_visible = 4;  // Wait for element to be visible
+    int32 timeout = 5;          // Timeout in ms
+}
+
+message FindElementResponse {
+    oneof response {
+        ElementRef element = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Find Elements =============
+
+message FindElementsRequest {
+    string page_id = 1;
+    SelectorType selector_type = 2;
+    string selector = 3;
+    int32 limit = 4;            // Max number of elements to return
+}
+
+message FindElementsResponse {
+    oneof response {
+        FindElementsResult elements = 1;
+        Error error = 2;
+    }
+}
+
+message FindElementsResult {
+    repeated ElementRef elements = 1;
+}
+
+// ============= Click =============
+
+message ClickRequest {
+    ElementRef element = 1;
+    MouseButton button = 2;
+    int32 click_count = 3;      // Number of clicks (1=single, 2=double)
+    int32 delay = 4;            // Delay between clicks in ms
+    repeated KeyModifier modifiers = 5;
+    ElementPosition position = 6;
+    // For stealth/human-like clicking
+    bool human_like = 7;        // Use Bezier curve movement
+    int32 movement_duration = 8; // Mouse movement duration in ms
+}
+
+message ClickResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Type =============
+
+message TypeRequest {
+    ElementRef element = 1;
+    string text = 2;
+    int32 delay = 3;            // Delay between keystrokes in ms
+    bool clear_first = 4;       // Clear existing text before typing
+    bool human_like = 5;        // Use human-like typing patterns
+    double typo_probability = 6; // Probability of making a typo (0.0-1.0)
+}
+
+message TypeResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Fill =============
+
+message FillRequest {
+    ElementRef element = 1;
+    string value = 2;
+    bool clear_first = 3;
+}
+
+message FillResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Get Attribute =============
+
+message GetAttributeRequest {
+    ElementRef element = 1;
+    string name = 2;            // Attribute name
+}
+
+message GetAttributeResponse {
+    oneof response {
+        AttributeValue value = 1;
+        Error error = 2;
+    }
+}
+
+message AttributeValue {
+    string name = 1;
+    string value = 2;
+}
+
+// ============= Get Attributes =============
+
+message GetAttributesRequest {
+    ElementRef element = 1;
+    repeated string names = 2;  // Attribute names to get
+}
+
+message GetAttributesResponse {
+    oneof response {
+        Attributes attributes = 1;
+        Error error = 2;
+    }
+}
+
+message Attributes {
+    repeated AttributeValue attributes = 1;
+}
+
+// ============= Get Text =============
+
+message GetTextRequest {
+    ElementRef element = 1;
+    bool include_hidden = 2;    // Include text from hidden elements
+}
+
+message GetTextResponse {
+    oneof response {
+        TextValue text = 1;
+        Error error = 2;
+    }
+}
+
+message TextValue {
+    string text = 1;
+    bool is_visible = 2;
+}
+
+// ============= Get HTML =============
+
+message GetHTMLRequest {
+    ElementRef element = 1;
+    bool outer = 2;             // Get outer HTML (including element itself)
+}
+
+message GetHTMLResponse {
+    oneof response {
+        HTMLValue html = 1;
+        Error error = 2;
+    }
+}
+
+message HTMLValue {
+    string html = 1;
+}
+
+// ============= Hover =============
+
+message HoverRequest {
+    ElementRef element = 1;
+    ElementPosition position = 2;
+    bool human_like = 3;        // Use Bezier curve movement
+    int32 movement_duration = 4;
+}
+
+message HoverResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Focus =============
+
+message FocusRequest {
+    ElementRef element = 1;
+}
+
+message FocusResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Select Option =============
+
+message SelectOptionRequest {
+    ElementRef element = 1;     // Must be a <select> element
+    repeated string values = 2;  // Option values to select
+    bool multiple = 3;          // Allow multiple selections
+}
+
+message SelectOptionResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Upload File =============
+
+message UploadFileRequest {
+    ElementRef element = 1;     // Must be a file input
+    repeated string file_paths = 2;  // Paths to files to upload
+}
+
+message UploadFileResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Scroll Into View =============
+
+message ScrollIntoViewRequest {
+    ElementRef element = 1;
+    bool align_to_top = 2;      // If true, align to top; otherwise align to bottom
+}
+
+message ScrollIntoViewResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Get Bounding Box =============
+
+message GetBoundingBoxRequest {
+    ElementRef element = 1;
+}
+
+message GetBoundingBoxResponse {
+    oneof response {
+        BoundingBox box = 1;
+        Error error = 2;
+    }
+}
+
+message BoundingBox {
+    double x = 1;
+    double y = 2;
+    double width = 3;
+    double height = 4;
+}
+
+// ============= Is Visible =============
+
+message IsVisibleRequest {
+    ElementRef element = 1;
+}
+
+message IsVisibleResponse {
+    oneof response {
+        VisibilityResult result = 1;
+        Error error = 2;
+    }
+}
+
+message VisibilityResult {
+    bool is_visible = 1;
+    string reason = 2;          // Why it's not visible
+}
+
+// ============= Is Enabled =============
+
+message IsEnabledRequest {
+    ElementRef element = 1;
+}
+
+message IsEnabledResponse {
+    oneof response {
+        EnabledResult result = 1;
+        Error error = 2;
+    }
+}
+
+message EnabledResult {
+    bool is_enabled = 1;
+    string reason = 2;
+}
+
+// ============= Wait For Element =============
+
+message WaitForElementRequest {
+    string page_id = 1;
+    SelectorType selector_type = 2;
+    string selector = 3;
+
+    enum WaitState {
+        WAIT_STATE_UNSPECIFIED = 0;
+        WAIT_STATE_ATTACHED = 1;        // Element is in DOM
+        WAIT_STATE_VISIBLE = 2;         // Element is visible
+        WAIT_STATE_HIDDEN = 3;          // Element is hidden
+        WAIT_STATE_REMOVED = 4;         // Element is removed from DOM
+        WAIT_STATE_ENABLED = 5;         // Element is enabled
+        WAIT_STATE_DISABLED = 6;        // Element is disabled
+    }
+
+    WaitState state = 4;
+    int32 timeout = 5;
+}
+
+message WaitForElementResponse {
+    oneof response {
+        ElementRef element = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Get Properties =============
+
+message GetPropertiesRequest {
+    ElementRef element = 1;
+    repeated string property_names = 2;  // JavaScript property names
+}
+
+message GetPropertiesResponse {
+    oneof response {
+        ElementProperties properties = 1;
+        Error error = 2;
+    }
+}
+
+message ElementProperties {
+    map<string, string> properties = 1;  // Property name -> JSON string value
+}
+
+// ============= Press Key =============
+
+message PressKeyRequest {
+    ElementRef element = 1;
+    string key = 2;              // Key to press (e.g., "Enter", "ArrowLeft", "a")
+    repeated KeyModifier modifiers = 3;
+    int32 delay = 4;             // Delay between keydown and keyup in ms
+}
+
+message PressKeyResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Drag and Drop =============
+
+message DragAndDropRequest {
+    ElementRef source = 1;       // Element to drag
+    ElementRef target = 2;       // Element to drop on
+    bool human_like = 3;         // Use Bezier curve movement
+    int32 movement_duration = 4;
+}
+
+message DragAndDropResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}

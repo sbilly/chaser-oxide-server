@@ -1,0 +1,554 @@
+// Copyright 2026 Chaser-Oxide Server
+// Page operations and navigation service
+syntax = "proto3";
+
+package chaser.oxide.v1;
+
+import "common.proto";
+import "browser.proto";
+
+// ============= PageService =============
+// Manages browser pages/tabs and their operations
+service PageService {
+    // Create a new page/tab in the browser
+    rpc CreatePage(CreatePageRequest) returns (CreatePageResponse);
+
+    // Navigate to a URL
+    rpc Navigate(NavigateRequest) returns (NavigateResponse);
+
+    // Get current page snapshot (accessible tree)
+    rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+
+    // Take a screenshot of the page
+    rpc Screenshot(ScreenshotRequest) returns (ScreenshotResponse);
+
+    // Execute JavaScript in the page context
+    rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
+
+    // Evaluate JavaScript on a specific element
+    rpc EvaluateOnElement(EvaluateOnElementRequest) returns (EvaluateOnElementResponse);
+
+    // Set page HTML content
+    rpc SetContent(SetContentRequest) returns (SetContentResponse);
+
+    // Get page HTML content
+    rpc GetContent(GetContentRequest) returns (GetContentResponse);
+
+    // Reload the page
+    rpc Reload(ReloadRequest) returns (ReloadResponse);
+
+    // Go back in history
+    rpc GoBack(GoBackRequest) returns (GoBackResponse);
+
+    // Go forward in history
+    rpc GoForward(GoForwardRequest) returns (GoForwardResponse);
+
+    // Set viewport size
+    rpc SetViewport(SetViewportRequest) returns (SetViewportResponse);
+
+    // Emulate device (mobile, tablet, etc.)
+    rpc EmulateDevice(EmulateDeviceRequest) returns (EmulateDeviceResponse);
+
+    // Bring page to front (focus)
+    rpc BringToFront(BringToFrontRequest) returns (BringToFrontResponse);
+
+    // Get page metrics (layout metrics)
+    rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
+
+    // Close a page
+    rpc ClosePage(ClosePageRequest) returns (ClosePageResponse);
+
+    // Wait for specific condition or selector
+    rpc WaitFor(WaitForRequest) returns (WaitForResponse);
+
+    // Get page PDF
+    rpc GetPDF(GetPDFRequest) returns (GetPDFResponse);
+
+    // Add script to evaluate on new documents
+    rpc AddInitScript(AddInitScriptRequest) returns (AddInitScriptResponse);
+
+    // Override permissions
+    rpc OverridePermissions(OverridePermissionsRequest) returns (OverridePermissionsResponse);
+
+    // Set geolocation
+    rpc SetGeolocation(SetGeolocationRequest) returns (SetGeolocationResponse);
+
+    // Set offline mode
+    rpc SetOfflineMode(SetOfflineModeRequest) returns (SetOfflineModeResponse);
+
+    // Set cache enabled/disabled
+    rpc SetCacheEnabled(SetCacheEnabledRequest) returns (SetCacheEnabledResponse);
+
+    // Get cookies
+    rpc GetCookies(GetCookiesRequest) returns (GetCookiesResponse);
+
+    // Set cookies
+    rpc SetCookies(SetCookiesRequest) returns (SetCookiesResponse);
+
+    // Clear cookies
+    rpc ClearCookies(ClearCookiesRequest) returns (ClearCookiesResponse);
+}
+
+// ============= Create Page =============
+
+message CreatePageRequest {
+    string browser_id = 1;
+    string url = 2;           // Optional: navigate to URL on creation
+    Viewport viewport = 3;    // Optional: set viewport
+}
+
+message CreatePageResponse {
+    oneof response {
+        PageInfo page_info = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Navigate =============
+
+message NavigateRequest {
+    string page_id = 1;
+    string url = 2;
+    NavigationOptions options = 3;
+}
+
+message NavigateResponse {
+    oneof response {
+        NavigationResult result = 1;
+        Error error = 2;
+    }
+}
+
+message NavigationResult {
+    string url = 1;           // Final URL after redirects
+    int32 status_code = 2;    // HTTP status code
+    bool is_loaded = 3;
+}
+
+// ============= Get Snapshot =============
+
+message GetSnapshotRequest {
+    string page_id = 1;
+}
+
+message GetSnapshotResponse {
+    oneof response {
+        PageSnapshot snapshot = 1;
+        Error error = 2;
+    }
+}
+
+message PageSnapshot {
+    string title = 1;
+    string url = 2;
+    repeated NodeInfo nodes = 3;  // Accessible tree
+}
+
+message NodeInfo {
+    string node_id = 1;
+    string role = 2;             // ARIA role
+    string name = 3;             // Accessible name
+    string description = 4;      // Accessible description
+    string tag_name = 5;
+    repeated string attributes = 6;
+    repeated string children = 7; // Child node IDs
+    bool is_visible = 8;
+    bool is_interactive = 9;
+}
+
+// ============= Screenshot =============
+
+message ScreenshotRequest {
+    string page_id = 1;
+    ScreenshotOptions options = 2;
+}
+
+message ScreenshotResponse {
+    oneof response {
+        ScreenshotResult result = 1;
+        Error error = 2;
+    }
+}
+
+message ScreenshotResult {
+    bytes data = 1;            // Image binary data
+    string format = 2;         // Image format (png, jpeg, webp)
+    int32 width = 3;
+    int32 height = 4;
+}
+
+// ============= Evaluate =============
+
+message EvaluateRequest {
+    string page_id = 1;
+    string expression = 2;     // JavaScript expression to evaluate
+    bool await_promise = 3;    // Wait for promises to resolve
+    int32 timeout = 4;         // Evaluation timeout in ms
+}
+
+message EvaluateResponse {
+    oneof response {
+        EvaluationResult result = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Evaluate On Element =============
+
+message EvaluateOnElementRequest {
+    ElementRef element = 1;
+    string expression = 2;
+    bool await_promise = 3;
+    int32 timeout = 4;
+}
+
+message EvaluateOnElementResponse {
+    oneof response {
+        EvaluationResult result = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Set Content =============
+
+message SetContentRequest {
+    string page_id = 1;
+    string html = 2;
+    bool wait_until_loaded = 3;
+}
+
+message SetContentResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Get Content =============
+
+message GetContentRequest {
+    string page_id = 1;
+}
+
+message GetContentResponse {
+    oneof response {
+        PageContent content = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Reload =============
+
+message ReloadRequest {
+    string page_id = 1;
+    NavigationOptions options = 2;
+}
+
+message ReloadResponse {
+    oneof response {
+        NavigationResult result = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Go Back =============
+
+message GoBackRequest {
+    string page_id = 1;
+    NavigationOptions options = 2;
+}
+
+message GoBackResponse {
+    oneof response {
+        NavigationResult result = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Go Forward =============
+
+message GoForwardRequest {
+    string page_id = 1;
+    NavigationOptions options = 2;
+}
+
+message GoForwardResponse {
+    oneof response {
+        NavigationResult result = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Set Viewport =============
+
+message SetViewportRequest {
+    string page_id = 1;
+    Viewport viewport = 2;
+}
+
+message SetViewportResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Emulate Device =============
+
+message EmulateDeviceRequest {
+    string page_id = 1;
+
+    // Predefined device types
+    enum DeviceType {
+        DEVICE_TYPE_UNSPECIFIED = 0;
+        DEVICE_TYPE_DESKTOP = 1;
+        DEVICE_TYPE_IPHONE = 2;
+        DEVICE_TYPE_IPHONE_PRO = 3;
+        DEVICE_TYPE_IPAD = 4;
+        DEVICE_TYPE_IPAD_PRO = 5;
+        DEVICE_TYPE_ANDROID_PHONE = 6;
+        DEVICE_TYPE_ANDROID_TABLET = 7;
+    }
+
+    oneof device {
+        DeviceType device_type = 2;
+        Viewport viewport = 3;
+    }
+}
+
+message EmulateDeviceResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Bring To Front =============
+
+message BringToFrontRequest {
+    string page_id = 1;
+}
+
+message BringToFrontResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Get Metrics =============
+
+message GetMetricsRequest {
+    string page_id = 1;
+}
+
+message GetMetricsResponse {
+    oneof response {
+        Metrics metrics = 1;
+        Error error = 2;
+    }
+}
+
+message Metrics {
+    string timestamp = 1;
+    int64 layout_duration = 2;
+    int64 recalculate_style_duration = 3;
+    int32 documents = 4;
+    int32 frames = 5;
+    int32 js_event_listeners = 6;
+    repeated LayoutEntry layouts = 7;
+    repeated StyleRecalcEntry style_recalcs = 8;
+}
+
+message LayoutEntry {
+    int64 layout_duration = 1;
+    repeated string layout_objects = 2;
+}
+
+message StyleRecalcEntry {
+    int64 style_duration = 1;
+}
+
+// ============= Close Page =============
+
+message ClosePageRequest {
+    string page_id = 1;
+    bool run_before_unload = 2;  // Run beforeunload handler
+}
+
+message ClosePageResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Wait For =============
+
+message WaitForRequest {
+    string page_id = 1;
+
+    oneof wait_condition {
+        string selector = 2;           // Wait for selector to appear
+        int32 timeout = 3;             // Just wait for timeout
+        string navigation_url = 4;     // Wait for navigation to URL
+    }
+}
+
+message WaitForResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Get PDF =============
+
+message GetPDFRequest {
+    string page_id = 1;
+    bool landscape = 2;
+    bool display_header_footer = 3;
+    bool print_background = 4;
+    double scale = 5;
+    double paper_width = 6;   // Inches
+    double paper_height = 7;  // Inches
+    double margin_top = 8;
+    double margin_bottom = 9;
+    double margin_left = 10;
+    double margin_right = 11;
+    string page_ranges = 12;  // e.g., '1-5,8,11-13'
+}
+
+message GetPDFResponse {
+    oneof response {
+        bytes pdf_data = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Add Init Script =============
+
+message AddInitScriptRequest {
+    string page_id = 1;
+    string script = 2;         // JavaScript source
+}
+
+message AddInitScriptResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Override Permissions =============
+
+message OverridePermissionsRequest {
+    string page_id = 1;
+    string origin = 2;         // Permission origin (e.g., https://example.com)
+    repeated string permissions = 3;  // geolocation, notifications, etc.
+}
+
+message OverridePermissionsResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Set Geolocation =============
+
+message SetGeolocationRequest {
+    string page_id = 1;
+    double latitude = 2;
+    double longitude = 3;
+    double accuracy = 4;       // Optional accuracy in meters
+}
+
+message SetGeolocationResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Set Offline Mode =============
+
+message SetOfflineModeRequest {
+    string page_id = 1;
+    bool offline = 2;
+}
+
+message SetOfflineModeResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Set Cache Enabled =============
+
+message SetCacheEnabledRequest {
+    string page_id = 1;
+    bool enabled = 2;
+}
+
+message SetCacheEnabledResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Cookies =============
+
+message GetCookiesRequest {
+    string page_id = 1;
+    repeated string urls = 2;  // Filter by URLs
+}
+
+message Cookie {
+    string name = 1;
+    string value = 2;
+    string domain = 3;
+    string path = 4;
+    int64 expires = 5;         // Unix timestamp
+    int32 size = 6;
+    bool http_only = 7;
+    bool secure = 8;
+    bool session = 9;
+    string same_site = 10;     // Strict, Lax, None
+}
+
+message GetCookiesResponse {
+    oneof response {
+        Cookies cookies = 1;
+        Error error = 2;
+    }
+}
+
+message Cookies {
+    repeated Cookie cookies = 1;
+}
+
+message SetCookiesRequest {
+    string page_id = 1;
+    repeated Cookie cookies = 2;
+}
+
+message SetCookiesResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+message ClearCookiesRequest {
+    string page_id = 1;
+}
+
+message ClearCookiesResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}

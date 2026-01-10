@@ -1,0 +1,147 @@
+// Copyright 2026 Chaser-Oxide Server
+// Browser lifecycle management service
+syntax = "proto3";
+
+package chaser.oxide.v1;
+
+import "common.proto";
+
+// ============= BrowserService =============
+// Manages browser instance lifecycle
+service BrowserService {
+    // Launch a new browser instance
+    // Returns a browser_id that should be used for all subsequent operations
+    rpc Launch(LaunchRequest) returns (LaunchResponse);
+
+    // Get all pages/tabs for a browser
+    rpc GetPages(GetPagesRequest) returns (GetPagesResponse);
+
+    // Close a browser instance and all its pages
+    rpc Close(CloseRequest) returns (CloseResponse);
+
+    // Get browser version information
+    rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+
+    // Get browser status and health
+    rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+
+    // Connect to an existing browser instance
+    rpc ConnectTo(ConnectRequest) returns (ConnectResponse);
+}
+
+// ============= Launch Browser =============
+
+message LaunchRequest {
+    BrowserOptions options = 1;  // Browser launch configuration
+}
+
+message LaunchResponse {
+    oneof response {
+        BrowserInfo browser_info = 1;    // Successfully launched browser
+        Error error = 2;                 // Launch failed
+    }
+}
+
+// ============= Get Pages =============
+
+message GetPagesRequest {
+    string browser_id = 1;  // Browser instance ID
+}
+
+message PageInfo {
+    string page_id = 1;
+    string browser_id = 2;
+    string url = 3;
+    string title = 4;
+    bool is_loaded = 5;
+    int64 created_at = 6;    // Unix timestamp
+}
+
+message GetPagesResponse {
+    oneof response {
+        GetPagesResult pages = 1;
+        Error error = 2;
+    }
+}
+
+message GetPagesResult {
+    repeated PageInfo pages = 1;
+}
+
+// ============= Close Browser =============
+
+message CloseRequest {
+    string browser_id = 1;  // Browser instance ID
+    bool force = 2;         // Force close even if pages are still active
+}
+
+message CloseResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+// ============= Get Version =============
+
+message GetVersionRequest {
+    string browser_id = 1;  // Browser instance ID (optional, use running browser)
+    string executable_path = 2;  // Path to browser executable (optional)
+}
+
+message GetVersionResponse {
+    oneof response {
+        VersionInfo version_info = 1;
+        Error error = 2;
+    }
+}
+
+message VersionInfo {
+    string protocol_version = 1;   // CDP protocol version
+    string product = 2;            // Browser product name
+    string revision = 3;           // Git revision
+    string user_agent = 4;         // User agent string
+    string javascript_version = 5; // JavaScript engine version
+}
+
+// ============= Get Status =============
+
+message GetStatusRequest {
+    string browser_id = 1;
+}
+
+message GetStatusResponse {
+    oneof response {
+        BrowserStatus status = 1;
+        Error error = 2;
+    }
+}
+
+message BrowserStatus {
+    string browser_id = 1;
+    bool is_running = 2;
+    int32 page_count = 3;
+    int64 uptime_seconds = 4;
+    int64 memory_usage_bytes = 5;
+    repeated string active_pages = 6;  // Page IDs
+}
+
+// ============= Connect to Browser =============
+
+message ConnectRequest {
+    // WebSocket URL to connect to existing browser
+    string websocket_url = 1;
+
+    // OR process ID of existing browser
+    int32 pid = 2;
+
+    // Browser options for connection configuration
+    BrowserOptions options = 3;
+}
+
+message ConnectResponse {
+    oneof response {
+        BrowserInfo browser_info = 1;
+        Error error = 2;
+    }
+}
