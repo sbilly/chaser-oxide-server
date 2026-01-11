@@ -61,82 +61,128 @@ impl Default for FingerprintGeneratorImpl {
     }
 }
 
+/// Configuration for creating base fingerprints
+pub struct FingerprintConfig<'a> {
+    pub platform: &'a str,
+    pub vendor: &'a str,
+    pub user_agent: &'a str,
+    pub locale: &'a str,
+    pub screen: (u32, u32),
+    pub webgl_vendor: &'a str,
+    pub webgl_renderer: &'a str,
+    pub hardware_concurrency: u32,
+    pub device_memory: Option<u32>,
+    pub accept_encoding: &'a str,
+}
+
 impl FingerprintGeneratorImpl {
     /// Create a new fingerprint generator
     pub fn new() -> Self {
         Self
     }
 
-    /// Generate random hardware concurrency
+    /// Generate random hardware concurrency from predefined values
     fn generate_hardware_concurrency() -> u32 {
-        let mut rng = rand::thread_rng();
         let options = [4, 6, 8, 12, 16, 24, 32];
-        options[rng.gen_range(0..options.len())]
+        options[rand::random::<usize>() % options.len()]
     }
 
-    /// Generate random device memory
+    /// Generate random device memory from predefined values
     fn generate_device_memory() -> Option<u32> {
-        let mut rng = rand::thread_rng();
         let options = [4, 8, 16, 32];
-        Some(options[rng.gen_range(0..options.len())])
+        Some(options[rand::random::<usize>() % options.len()])
     }
 
-    /// Generate screen resolution
-    fn generate_screen_resolution(profile_type: services::ProfileType) -> (u32, u32) {
-        let mut rng = rand::thread_rng();
+    /// Generate random user agent from platform-specific list
+    fn random_user_agent(profile_type: services::ProfileType) -> &'static str {
+        let agents = match profile_type {
+            services::ProfileType::Windows => WINDOWS_USER_AGENTS,
+            services::ProfileType::MacOS => MACOS_USER_AGENTS,
+            services::ProfileType::Linux => LINUX_USER_AGENTS,
+            services::ProfileType::Android => ANDROID_USER_AGENTS,
+            services::ProfileType::IOS => IOS_USER_AGENTS,
+            services::ProfileType::Custom => WINDOWS_USER_AGENTS,
+        };
+        agents[rand::random::<usize>() % agents.len()]
+    }
 
-        match profile_type {
-            services::ProfileType::Windows => {
-                let resolutions = [(1920, 1080), (2560, 1440), (3840, 2160), (1366, 768)];
-                resolutions[rng.gen_range(0..resolutions.len())]
-            }
-            services::ProfileType::MacOS => {
-                let resolutions = [
-                    (2560, 1440),
-                    (2880, 1800),
-                    (3840, 2160),
-                    (5120, 2880),
-                    (1920, 1080),
-                ];
-                resolutions[rng.gen_range(0..resolutions.len())]
-            }
-            services::ProfileType::Linux => {
-                let resolutions = [(1920, 1080), (2560, 1440), (3840, 2160)];
-                resolutions[rng.gen_range(0..resolutions.len())]
-            }
-            services::ProfileType::Android => {
-                let resolutions = [
-                    (360, 800),
-                    (390, 844),
-                    (414, 896),
-                    (393, 851),
-                    (412, 915),
-                ];
-                resolutions[rng.gen_range(0..resolutions.len())]
-            }
-            services::ProfileType::IOS => {
-                let resolutions = [(390, 844), (414, 896), (393, 851), (1024, 1366)];
-                resolutions[rng.gen_range(0..resolutions.len())]
-            }
-            services::ProfileType::Custom => (1920, 1080),
+    /// Generate random WebGL vendor
+    fn random_webgl_vendor() -> &'static str {
+        WEBGL_VENDORS[rand::random::<usize>() % WEBGL_VENDORS.len()]
+    }
+
+    /// Generate random WebGL renderer
+    fn random_webgl_renderer() -> &'static str {
+        WEBGL_RENDERERS[rand::random::<usize>() % WEBGL_RENDERERS.len()]
+    }
+
+    /// Create base fingerprint with common options
+    fn create_base_fingerprint(config: FingerprintConfig<'_>) -> services::Fingerprint {
+        services::Fingerprint {
+            headers: services::HeadersFingerprint {
+                user_agent: config.user_agent.to_string(),
+                accept_language: format!("{},en;q=0.9", config.locale),
+                accept_encoding: config.accept_encoding.to_string(),
+            },
+            navigator: services::NavigatorFingerprint {
+                platform: config.platform.to_string(),
+                vendor: config.vendor.to_string(),
+                hardware_concurrency: config.hardware_concurrency,
+                device_memory: config.device_memory,
+                language: config.locale.to_string(),
+            },
+            screen: services::ScreenFingerprint {
+                width: config.screen.0,
+                height: config.screen.1,
+                color_depth: 24,
+                pixel_depth: 24,
+            },
+            webgl: services::WebGLFingerprint {
+                vendor: config.webgl_vendor.to_string(),
+                renderer: config.webgl_renderer.to_string(),
+            },
+            options: services::ProfileOptions {
+                inject_navigator: true,
+                inject_screen: true,
+                inject_webgl: true,
+                inject_canvas: true,
+                inject_audio: true,
+            },
         }
     }
 
-    /// Generate locale
-    fn generate_locale(profile_type: services::ProfileType) -> String {
-        let mut rng = rand::thread_rng();
-
-        let locales = match profile_type {
-            services::ProfileType::Windows | services::ProfileType::MacOS | services::ProfileType::Linux => {
-                vec!["en-US", "en-GB", "de-DE", "fr-FR", "es-ES", "ja-JP", "zh-CN"]
+    /// Generate screen resolution for platform
+    fn generate_screen_resolution(profile_type: services::ProfileType) -> (u32, u32) {
+        // Use Vec to allow different sizes per platform
+        let resolutions: Vec<(u32, u32)> = match profile_type {
+            services::ProfileType::Windows => {
+                vec![(1920, 1080), (2560, 1440), (3840, 2160), (1366, 768)]
             }
-            services::ProfileType::Android | services::ProfileType::IOS => {
-                vec!["en-US", "en-GB", "de-DE", "fr-FR", "es-ES", "ja-JP", "zh-CN"]
+            services::ProfileType::MacOS => {
+                vec![(2560, 1440), (2880, 1800), (3840, 2160), (5120, 2880), (1920, 1080)]
             }
-            services::ProfileType::Custom => vec!["en-US"],
+            services::ProfileType::Linux => {
+                vec![(1920, 1080), (2560, 1440), (3840, 2160)]
+            }
+            services::ProfileType::Android => {
+                vec![(360, 800), (390, 844), (414, 896), (393, 851), (412, 915)]
+            }
+            services::ProfileType::IOS => {
+                vec![(390, 844), (414, 896), (393, 851), (1024, 1366)]
+            }
+            services::ProfileType::Custom => {
+                vec![(1920, 1080)]
+            }
         };
+        resolutions[rand::random::<usize>() % resolutions.len()]
+    }
 
-        locales[rng.gen_range(0..locales.len())].to_string()
+    /// Generate locale for platform
+    #[allow(unused_variables)]
+    fn generate_locale(profile_type: services::ProfileType) -> String {
+        // Common locales for desktop and mobile platforms
+        let locales = ["en-US", "en-GB", "de-DE", "fr-FR", "es-ES", "ja-JP", "zh-CN"];
+        locales[rand::random::<usize>() % locales.len()].to_string()
     }
 
     /// Generate timezone
@@ -165,192 +211,97 @@ impl FingerprintGeneratorImpl {
 impl super::traits::FingerprintGenerator for FingerprintGeneratorImpl {
     /// Generate a Windows fingerprint
     async fn generate_windows(&self) -> Result<services::Fingerprint, Error> {
-        let mut rng = rand::thread_rng();
-        let (width, height) = Self::generate_screen_resolution(services::ProfileType::Windows);
+        let screen = Self::generate_screen_resolution(services::ProfileType::Windows);
+        let locale = Self::generate_locale(services::ProfileType::Windows);
 
-        Ok(services::Fingerprint {
-            headers: services::HeadersFingerprint {
-                user_agent: WINDOWS_USER_AGENTS[rng.gen_range(0..WINDOWS_USER_AGENTS.len())].to_string(),
-                accept_language: "en-US,en;q=0.9".to_string(),
-                accept_encoding: "gzip, deflate, br".to_string(),
-            },
-            navigator: services::NavigatorFingerprint {
-                platform: "Win32".to_string(),
-                vendor: "Google Inc.".to_string(),
-                hardware_concurrency: Self::generate_hardware_concurrency(),
-                device_memory: Self::generate_device_memory(),
-                language: Self::generate_locale(services::ProfileType::Windows),
-            },
-            screen: services::ScreenFingerprint {
-                width,
-                height,
-                color_depth: 24,
-                pixel_depth: 24,
-            },
-            webgl: services::WebGLFingerprint {
-                vendor: WEBGL_VENDORS[rng.gen_range(0..WEBGL_VENDORS.len())].to_string(),
-                renderer: WEBGL_RENDERERS[rng.gen_range(0..WEBGL_RENDERERS.len())].to_string(),
-            },
-            options: services::ProfileOptions {
-                inject_navigator: true,
-                inject_screen: true,
-                inject_webgl: true,
-                inject_canvas: true,
-                inject_audio: true,
-            },
-        })
+        Ok(Self::create_base_fingerprint(FingerprintConfig {
+            platform: "Win32",
+            vendor: "Google Inc.",
+            user_agent: Self::random_user_agent(services::ProfileType::Windows),
+            locale: &locale,
+            screen,
+            webgl_vendor: Self::random_webgl_vendor(),
+            webgl_renderer: Self::random_webgl_renderer(),
+            hardware_concurrency: Self::generate_hardware_concurrency(),
+            device_memory: Self::generate_device_memory(),
+            accept_encoding: "gzip, deflate, br",
+        }))
     }
 
     /// Generate a macOS fingerprint
     async fn generate_macos(&self) -> Result<services::Fingerprint, Error> {
-        let mut rng = rand::thread_rng();
-        let (width, height) = Self::generate_screen_resolution(services::ProfileType::MacOS);
+        let screen = Self::generate_screen_resolution(services::ProfileType::MacOS);
+        let locale = Self::generate_locale(services::ProfileType::MacOS);
 
-        Ok(services::Fingerprint {
-            headers: services::HeadersFingerprint {
-                user_agent: MACOS_USER_AGENTS[rng.gen_range(0..MACOS_USER_AGENTS.len())].to_string(),
-                accept_language: "en-US,en;q=0.9".to_string(),
-                accept_encoding: "gzip, deflate, br".to_string(),
-            },
-            navigator: services::NavigatorFingerprint {
-                platform: "MacIntel".to_string(),
-                vendor: "Google Inc.".to_string(),
-                hardware_concurrency: Self::generate_hardware_concurrency(),
-                device_memory: Self::generate_device_memory(),
-                language: Self::generate_locale(services::ProfileType::MacOS),
-            },
-            screen: services::ScreenFingerprint {
-                width,
-                height,
-                color_depth: 24,
-                pixel_depth: 24,
-            },
-            webgl: services::WebGLFingerprint {
-                vendor: WEBGL_VENDORS[rng.gen_range(0..WEBGL_VENDORS.len())].to_string(),
-                renderer: WEBGL_RENDERERS[rng.gen_range(0..WEBGL_RENDERERS.len())].to_string(),
-            },
-            options: services::ProfileOptions {
-                inject_navigator: true,
-                inject_screen: true,
-                inject_webgl: true,
-                inject_canvas: true,
-                inject_audio: true,
-            },
-        })
+        Ok(Self::create_base_fingerprint(FingerprintConfig {
+            platform: "MacIntel",
+            vendor: "Google Inc.",
+            user_agent: Self::random_user_agent(services::ProfileType::MacOS),
+            locale: &locale,
+            screen,
+            webgl_vendor: Self::random_webgl_vendor(),
+            webgl_renderer: Self::random_webgl_renderer(),
+            hardware_concurrency: Self::generate_hardware_concurrency(),
+            device_memory: Self::generate_device_memory(),
+            accept_encoding: "gzip, deflate, br",
+        }))
     }
 
     /// Generate a Linux fingerprint
     async fn generate_linux(&self) -> Result<services::Fingerprint, Error> {
-        let mut rng = rand::thread_rng();
-        let (width, height) = Self::generate_screen_resolution(services::ProfileType::Linux);
+        let screen = Self::generate_screen_resolution(services::ProfileType::Linux);
+        let locale = Self::generate_locale(services::ProfileType::Linux);
 
-        Ok(services::Fingerprint {
-            headers: services::HeadersFingerprint {
-                user_agent: LINUX_USER_AGENTS[rng.gen_range(0..LINUX_USER_AGENTS.len())].to_string(),
-                accept_language: "en-US,en;q=0.9".to_string(),
-                accept_encoding: "gzip, deflate".to_string(),
-            },
-            navigator: services::NavigatorFingerprint {
-                platform: "Linux x86_64".to_string(),
-                vendor: "".to_string(),
-                hardware_concurrency: Self::generate_hardware_concurrency(),
-                device_memory: Self::generate_device_memory(),
-                language: Self::generate_locale(services::ProfileType::Linux),
-            },
-            screen: services::ScreenFingerprint {
-                width,
-                height,
-                color_depth: 24,
-                pixel_depth: 24,
-            },
-            webgl: services::WebGLFingerprint {
-                vendor: WEBGL_VENDORS[rng.gen_range(0..WEBGL_VENDORS.len())].to_string(),
-                renderer: WEBGL_RENDERERS[rng.gen_range(0..WEBGL_RENDERERS.len())].to_string(),
-            },
-            options: services::ProfileOptions {
-                inject_navigator: true,
-                inject_screen: true,
-                inject_webgl: true,
-                inject_canvas: true,
-                inject_audio: true,
-            },
-        })
+        Ok(Self::create_base_fingerprint(FingerprintConfig {
+            platform: "Linux x86_64",
+            vendor: "",
+            user_agent: Self::random_user_agent(services::ProfileType::Linux),
+            locale: &locale,
+            screen,
+            webgl_vendor: Self::random_webgl_vendor(),
+            webgl_renderer: Self::random_webgl_renderer(),
+            hardware_concurrency: Self::generate_hardware_concurrency(),
+            device_memory: Self::generate_device_memory(),
+            accept_encoding: "gzip, deflate",
+        }))
     }
 
     /// Generate an Android fingerprint
     async fn generate_android(&self) -> Result<services::Fingerprint, Error> {
-        let mut rng = rand::thread_rng();
-        let (width, height) = Self::generate_screen_resolution(services::ProfileType::Android);
+        let screen = Self::generate_screen_resolution(services::ProfileType::Android);
+        let locale = Self::generate_locale(services::ProfileType::Android);
 
-        Ok(services::Fingerprint {
-            headers: services::HeadersFingerprint {
-                user_agent: ANDROID_USER_AGENTS[rng.gen_range(0..ANDROID_USER_AGENTS.len())].to_string(),
-                accept_language: "en-US,en;q=0.9".to_string(),
-                accept_encoding: "gzip, deflate, br".to_string(),
-            },
-            navigator: services::NavigatorFingerprint {
-                platform: "Linux armv8l".to_string(),
-                vendor: "Google Inc.".to_string(),
-                hardware_concurrency: 8,
-                device_memory: Some(8),
-                language: Self::generate_locale(services::ProfileType::Android),
-            },
-            screen: services::ScreenFingerprint {
-                width,
-                height,
-                color_depth: 24,
-                pixel_depth: 24,
-            },
-            webgl: services::WebGLFingerprint {
-                vendor: "Qualcomm".to_string(),
-                renderer: "Adreno 740".to_string(),
-            },
-            options: services::ProfileOptions {
-                inject_navigator: true,
-                inject_screen: true,
-                inject_webgl: true,
-                inject_canvas: true,
-                inject_audio: true,
-            },
-        })
+        Ok(Self::create_base_fingerprint(FingerprintConfig {
+            platform: "Linux armv8l",
+            vendor: "Google Inc.",
+            user_agent: Self::random_user_agent(services::ProfileType::Android),
+            locale: &locale,
+            screen,
+            webgl_vendor: "Qualcomm",
+            webgl_renderer: "Adreno 740",
+            hardware_concurrency: 8,
+            device_memory: Some(8),
+            accept_encoding: "gzip, deflate, br",
+        }))
     }
 
     /// Generate an iOS fingerprint
     async fn generate_ios(&self) -> Result<services::Fingerprint, Error> {
-        let mut rng = rand::thread_rng();
-        let (width, height) = Self::generate_screen_resolution(services::ProfileType::IOS);
+        let screen = Self::generate_screen_resolution(services::ProfileType::IOS);
+        let locale = Self::generate_locale(services::ProfileType::IOS);
 
-        Ok(services::Fingerprint {
-            headers: services::HeadersFingerprint {
-                user_agent: IOS_USER_AGENTS[rng.gen_range(0..IOS_USER_AGENTS.len())].to_string(),
-                accept_language: "en-US,en;q=0.9".to_string(),
-                accept_encoding: "gzip, deflate, br".to_string(),
-            },
-            navigator: services::NavigatorFingerprint {
-                platform: "iPhone".to_string(),
-                vendor: "Apple Computer, Inc.".to_string(),
-                hardware_concurrency: 6,
-                device_memory: Some(6),
-                language: Self::generate_locale(services::ProfileType::IOS),
-            },
-            screen: services::ScreenFingerprint {
-                width,
-                height,
-                color_depth: 24,
-                pixel_depth: 24,
-            },
-            webgl: services::WebGLFingerprint {
-                vendor: "Apple Inc.".to_string(),
-                renderer: "Apple GPU".to_string(),
-            },
-            options: services::ProfileOptions {
-                inject_navigator: true,
-                inject_screen: true,
-                inject_webgl: true,
-                inject_canvas: true,
-                inject_audio: true,
-            },
-        })
+        Ok(Self::create_base_fingerprint(FingerprintConfig {
+            platform: "iPhone",
+            vendor: "Apple Computer, Inc.",
+            user_agent: Self::random_user_agent(services::ProfileType::IOS),
+            locale: &locale,
+            screen,
+            webgl_vendor: "Apple Inc.",
+            webgl_renderer: "Apple GPU",
+            hardware_concurrency: 6,
+            device_memory: Some(6),
+            accept_encoding: "gzip, deflate, br",
+        }))
     }
 
     /// Generate a custom fingerprint

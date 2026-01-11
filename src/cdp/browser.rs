@@ -8,7 +8,7 @@ use super::traits::*;
 use crate::Error;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// CDP browser implementation
 #[derive(Debug)]
@@ -136,19 +136,48 @@ impl CdpBrowser for CdpBrowserImpl {
 
     /// Close the browser
     async fn close(&self) -> Result<(), Error> {
-        info!("Closing browser");
+        info!("CdpBrowser::close: Closing browser at endpoint {}", self.endpoint);
 
         let mut connections = self.connections.lock().await;
+        let connection_count = connections.len();
+
+        if connection_count == 0 {
+            info!("CdpBrowser::close: No active connections to close");
+            return Ok(());
+        }
+
+        info!("CdpBrowser::close: Closing {} active CDP connections", connection_count);
+
+        let mut success_count = 0;
+        let mut failed_targets = Vec::new();
 
         // Close all connections
         for (target_id, connection) in connections.iter() {
-            debug!("Closing connection to target: {}", target_id);
-            if let Err(e) = connection.close().await {
-                tracing::warn!("Failed to close connection to {}: {}", target_id, e);
+            debug!("CdpBrowser::close: Closing connection to target: {}", target_id);
+            match connection.close().await {
+                Ok(_) => {
+                    success_count += 1;
+                    debug!("CdpBrowser::close: Successfully closed connection to {}", target_id);
+                }
+                Err(e) => {
+                    let tid = target_id.clone();
+                    warn!("CdpBrowser::close: Failed to close connection to {}: {}", tid, e);
+                    failed_targets.push((tid, e));
+                }
             }
         }
 
         connections.clear();
+
+        if !failed_targets.is_empty() {
+            warn!("CdpBrowser::close: {} connections failed to close:", failed_targets.len());
+            for (target_id, error) in &failed_targets {
+                warn!("  - Target {}: {}", target_id, error);
+            }
+        }
+
+        info!("CdpBrowser::close: Connection close summary: {} succeeded, {} failed",
+            success_count, failed_targets.len());
 
         Ok(())
     }
@@ -218,7 +247,17 @@ impl CdpBrowser for CdpBrowserImpl {
             .put(&new_url)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("Failed to create new target: {}", e)))?;
+            .map_err(|e| {
+                Error::internal(format!(
+r#"Failed to connect to Chrome CDP endpoint at {}.
+Please start Chrome with:
+  macOS: /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug
+  Linux: google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug
+  Windows: chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\chrome-debug
+Original error: {}"#,
+                    self.endpoint, e
+                ))
+            })?;
 
         // Read response as text first for debugging
         let response_text = response

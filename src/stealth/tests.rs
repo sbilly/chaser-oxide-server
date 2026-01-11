@@ -11,7 +11,8 @@ mod tests {
     use super::super::*;
     use super::super::traits::*;
     use super::super::super::services::traits as services;
-    use super::super::super::cdp::mock::MockCdpClient as CdpMockClient;
+    use super::super::super::session::mock::MockSessionManager;
+    use super::super::super::cdp::mock::MockCdpClient;
     use std::sync::Arc;
 
     // ============================================================================
@@ -295,8 +296,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_script_injector_inject_init_script() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp.clone());
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session.clone());
 
         let page_id = "test_page_1";
         let script = "(function() { console.log('test'); })();";
@@ -314,8 +315,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_script_injector_evaluate() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp.clone());
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session.clone());
 
         let page_id = "test_page_2";
         let script = "1 + 1";
@@ -329,8 +330,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_script_injector_inject_style() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp.clone());
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session.clone());
 
         let page_id = "test_page_3";
         let css = "body { background: red; }";
@@ -348,8 +349,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_script_injector_multiple_scripts() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp.clone());
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session.clone());
 
         let page_id = "test_page_4";
 
@@ -373,8 +374,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_script_injector_remove_script() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp.clone());
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session.clone());
 
         let page_id = "test_page_5";
 
@@ -398,8 +399,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_script_injector_clear_all() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp.clone());
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session.clone());
 
         let page_id = "test_page_6";
 
@@ -428,8 +429,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_script_injector_script_id_generation() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp.clone());
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session.clone());
 
         let page_id = "test_page_7";
 
@@ -455,8 +456,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_script_injector_get_nonexistent_scripts() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp);
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session);
 
         let result = injector.get_injected_scripts("nonexistent_page").await;
         assert!(result.is_err());
@@ -468,8 +469,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_engine_apply_profile() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = Arc::new(ScriptInjectorImpl::new(mock_cdp.clone())) as Arc<dyn ScriptInjector>;
+        let mock_session = Arc::new(MockSessionManager::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
+        let injector = Arc::new(ScriptInjectorImpl::new(mock_session.clone())) as Arc<dyn ScriptInjector>;
         let simulator =
             Arc::new(BehaviorSimulatorImpl::new(mock_cdp.clone())) as Arc<dyn BehaviorSimulator>;
 
@@ -528,8 +530,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_engine_apply_profile_partial() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = Arc::new(ScriptInjectorImpl::new(mock_cdp.clone())) as Arc<dyn ScriptInjector>;
+        let mock_session = Arc::new(MockSessionManager::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
+        let injector = Arc::new(ScriptInjectorImpl::new(mock_session.clone())) as Arc<dyn ScriptInjector>;
         let simulator =
             Arc::new(BehaviorSimulatorImpl::new(mock_cdp.clone())) as Arc<dyn BehaviorSimulator>;
 
@@ -586,8 +589,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_engine_get_applied_features() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = Arc::new(ScriptInjectorImpl::new(mock_cdp.clone())) as Arc<dyn ScriptInjector>;
+        let mock_session = Arc::new(MockSessionManager::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
+        let injector = Arc::new(ScriptInjectorImpl::new(mock_session.clone())) as Arc<dyn ScriptInjector>;
         let simulator =
             Arc::new(BehaviorSimulatorImpl::new(mock_cdp.clone())) as Arc<dyn BehaviorSimulator>;
 
@@ -644,8 +648,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_engine_get_applied_features_nonexistent() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = Arc::new(ScriptInjectorImpl::new(mock_cdp.clone())) as Arc<dyn ScriptInjector>;
+        let mock_session = Arc::new(MockSessionManager::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
+        let injector = Arc::new(ScriptInjectorImpl::new(mock_session.clone())) as Arc<dyn ScriptInjector>;
         let simulator =
             Arc::new(BehaviorSimulatorImpl::new(mock_cdp.clone())) as Arc<dyn BehaviorSimulator>;
 
@@ -657,8 +662,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_stealth_engine_remove_all() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = Arc::new(ScriptInjectorImpl::new(mock_cdp.clone())) as Arc<dyn ScriptInjector>;
+        let mock_session = Arc::new(MockSessionManager::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
+        let injector = Arc::new(ScriptInjectorImpl::new(mock_session.clone())) as Arc<dyn ScriptInjector>;
         let simulator =
             Arc::new(BehaviorSimulatorImpl::new(mock_cdp.clone())) as Arc<dyn BehaviorSimulator>;
 
@@ -761,7 +767,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_behavior_simulator_random_delay() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
         let simulator = BehaviorSimulatorImpl::new(mock_cdp);
 
         let result = simulator.random_delay(10, 20).await;
@@ -773,7 +779,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_behavior_simulator_bezier_path_generation() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
         let simulator = BehaviorSimulatorImpl::new(mock_cdp);
 
         let start = (0.0, 0.0);
@@ -796,8 +802,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_end_to_end_profile_workflow() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = Arc::new(ScriptInjectorImpl::new(mock_cdp.clone())) as Arc<dyn ScriptInjector>;
+        let mock_session = Arc::new(MockSessionManager::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
+        let injector = Arc::new(ScriptInjectorImpl::new(mock_session.clone())) as Arc<dyn ScriptInjector>;
         let simulator =
             Arc::new(BehaviorSimulatorImpl::new(mock_cdp.clone())) as Arc<dyn BehaviorSimulator>;
 
@@ -834,8 +841,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_end_to_end_multi_profile_workflow() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = Arc::new(ScriptInjectorImpl::new(mock_cdp.clone())) as Arc<dyn ScriptInjector>;
+        let mock_session = Arc::new(MockSessionManager::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
+        let injector = Arc::new(ScriptInjectorImpl::new(mock_session.clone())) as Arc<dyn ScriptInjector>;
         let simulator =
             Arc::new(BehaviorSimulatorImpl::new(mock_cdp.clone())) as Arc<dyn BehaviorSimulator>;
 
@@ -883,8 +891,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_end_to_end_fingerprint_randomization_workflow() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = Arc::new(ScriptInjectorImpl::new(mock_cdp.clone())) as Arc<dyn ScriptInjector>;
+        let mock_session = Arc::new(MockSessionManager::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
+        let injector = Arc::new(ScriptInjectorImpl::new(mock_session.clone())) as Arc<dyn ScriptInjector>;
         let simulator =
             Arc::new(BehaviorSimulatorImpl::new(mock_cdp.clone())) as Arc<dyn BehaviorSimulator>;
 
@@ -941,8 +950,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_profile_options() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = Arc::new(ScriptInjectorImpl::new(mock_cdp.clone())) as Arc<dyn ScriptInjector>;
+        let mock_session = Arc::new(MockSessionManager::new());
+        let mock_cdp = Arc::new(MockCdpClient::new());
+        let injector = Arc::new(ScriptInjectorImpl::new(mock_session.clone())) as Arc<dyn ScriptInjector>;
         let simulator =
             Arc::new(BehaviorSimulatorImpl::new(mock_cdp.clone())) as Arc<dyn BehaviorSimulator>;
 
@@ -1017,8 +1027,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_script_injector_css_escaping() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp);
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session);
 
         let page_id = "test_page_css";
         let css = r#"body { content: '\'; "\""; }"#; // CSS with quotes and backslashes
@@ -1035,8 +1045,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_page_isolation() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp);
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session);
 
         // Inject scripts into different pages
         injector
@@ -1059,8 +1069,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_nonexistent_script() {
-        let mock_cdp = Arc::new(CdpMockClient::new());
-        let injector = ScriptInjectorImpl::new(mock_cdp);
+        let mock_session = Arc::new(MockSessionManager::new());
+        let injector = ScriptInjectorImpl::new(mock_session);
 
         let page_id = "test_page_remove";
 

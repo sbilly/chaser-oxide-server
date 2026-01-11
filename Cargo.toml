@@ -59,6 +59,9 @@ chrono = "0.4"
 # Bytes utilities
 bytes = "1.0"
 
+# Compile-time hash maps
+phf = { version = "0.11", features = ["macros"] }
+
 [dev-dependencies]
 tokio-test = "0.4"
 futures-util = "0.3"

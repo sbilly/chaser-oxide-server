@@ -22,6 +22,22 @@ impl ElementFinder {
     }
 
     /// Find a single element
+    ///
+    /// Searches for a DOM element using the specified selector strategy.
+    /// Returns element information including ID, tag name, and text content.
+    ///
+    /// # Arguments
+    /// * `selector_type` - Type of selector (CSS, XPath, or Text)
+    /// * `selector` - Selector string
+    ///
+    /// # Returns
+    /// Element information including ID, tag name, and text content
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - Element is not found
+    /// - Selector is invalid
+    /// - JavaScript execution fails
     #[instrument(skip(self))]
     pub async fn find_element(
         &self,
@@ -50,6 +66,23 @@ impl ElementFinder {
     }
 
     /// Find multiple elements
+    ///
+    /// Searches for all DOM elements matching the specified selector.
+    /// Optionally limits the number of results returned.
+    ///
+    /// # Arguments
+    /// * `selector_type` - Type of selector (CSS, XPath, or Text)
+    /// * `selector` - Selector string
+    /// * `limit` - Optional maximum number of elements to return
+    ///
+    /// # Returns
+    /// Vector of element information objects
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - Selector is invalid
+    /// - JavaScript execution fails
+    /// - JSON parsing fails
     #[instrument(skip(self))]
     pub async fn find_elements(
         &self,
@@ -86,6 +119,22 @@ impl ElementFinder {
     }
 
     /// Wait for element
+    ///
+    /// Polls for an element at regular intervals until found or timeout.
+    /// Only retries on ElementNotFound errors; other errors are returned immediately.
+    ///
+    /// # Arguments
+    /// * `selector_type` - Type of selector (CSS, XPath, or Text)
+    /// * `selector` - Selector string
+    /// * `timeout_ms` - Maximum time to wait in milliseconds
+    ///
+    /// # Returns
+    /// Element information when found
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - Timeout expires before element is found
+    /// - Non-ElementNotFound error occurs during polling
     #[instrument(skip(self))]
     pub async fn wait_for_element(
         &self,
@@ -119,25 +168,30 @@ impl ElementFinder {
     }
 
     /// Build CSS selector script
+    ///
+    /// Generates JavaScript code to find elements using CSS selectors.
+    /// Uses querySelector for single element or querySelectorAll for multiple.
+    ///
+    /// # Arguments
+    /// * `selector` - CSS selector string
+    /// * `multiple` - If true, find all matching elements; otherwise find first match
+    ///
+    /// # Returns
+    /// JavaScript code that returns element information as JSON
     fn build_css_selector_script(&self, selector: &str, multiple: bool) -> Result<String> {
-        let selector_escaped = selector.replace('\'', "\\'");
+        let selector_escaped = Self::escape_selector(selector);
         let method = if multiple { "querySelectorAll" } else { "querySelector" };
 
-        let script = if multiple {
+        Ok(if multiple {
             format!(
                 r#"
                 (() => {{
                     const elements = document.{}('{}');
-                    const results = [];
-                    for (let i = 0; i < elements.length; i++) {{
-                        const el = elements[i];
-                        results.push({{
-                            element_id: el.id || 'css-' + i,
-                            tag_name: el.tagName.toLowerCase(),
-                            text_content: el.textContent ? el.textContent.substring(0, 100) : null
-                        }});
-                    }}
-                    return JSON.stringify(results);
+                    return JSON.stringify(Array.from(elements).map((el, i) => ({{
+                        element_id: el.id || 'css-' + i,
+                        tag_name: el.tagName.toLowerCase(),
+                        text_content: el.textContent?.substring(0, 100) || null
+                    }})));
                 }})()
                 "#,
                 method, selector_escaped
@@ -151,22 +205,31 @@ impl ElementFinder {
                     return JSON.stringify({{
                         element_id: el.id || 'css-single',
                         tag_name: el.tagName.toLowerCase(),
-                        text_content: el.textContent ? el.textContent.substring(0, 100) : null
+                        text_content: el.textContent?.substring(0, 100) || null
                     }});
                 }})()
                 "#,
                 method, selector_escaped
             )
-        };
-
-        Ok(script)
+        })
     }
 
     /// Build XPath selector script
+    ///
+    /// Generates JavaScript code to find elements using XPath expressions.
+    /// Uses document.evaluate with FIRST_ORDERED_NODE_TYPE for single element
+    /// or ORDERED_NODE_SNAPSHOT_TYPE for multiple elements.
+    ///
+    /// # Arguments
+    /// * `xpath` - XPath expression string
+    /// * `multiple` - If true, find all matching elements; otherwise find first match
+    ///
+    /// # Returns
+    /// JavaScript code that returns element information as JSON
     fn build_xpath_selector_script(&self, xpath: &str, multiple: bool) -> Result<String> {
-        let xpath_escaped = xpath.replace('\\', "\\\\").replace('"', r#"\""#);
+        let xpath_escaped = Self::escape_selector(xpath);
 
-        let script = if multiple {
+        Ok(if multiple {
             format!(
                 r#"
                 (() => {{
@@ -177,7 +240,7 @@ impl ElementFinder {
                         results.push({{
                             element_id: el.id || 'xpath-' + i,
                             tag_name: el.tagName.toLowerCase(),
-                            text_content: el.textContent ? el.textContent.substring(0, 100) : null
+                            text_content: el.textContent?.substring(0, 100) || null
                         }});
                     }}
                     return JSON.stringify(results);
@@ -195,22 +258,30 @@ impl ElementFinder {
                     return JSON.stringify({{
                         element_id: el.id || 'xpath-single',
                         tag_name: el.tagName.toLowerCase(),
-                        text_content: el.textContent ? el.textContent.substring(0, 100) : null
+                        text_content: el.textContent?.substring(0, 100) || null
                     }});
                 }})()
                 "#,
                 xpath_escaped
             )
-        };
-
-        Ok(script)
+        })
     }
 
     /// Build text selector script
+    ///
+    /// Generates JavaScript code to find elements containing specific text.
+    /// Uses TreeWalker API to traverse text nodes and find parent elements.
+    ///
+    /// # Arguments
+    /// * `text` - Text string to search for
+    /// * `multiple` - If true, find all matching elements; otherwise find first match
+    ///
+    /// # Returns
+    /// JavaScript code that returns element information as JSON
     fn build_text_selector_script(&self, text: &str, multiple: bool) -> Result<String> {
-        let text_escaped = text.replace('\\', "\\\\").replace('"', r#"\""#);
+        let text_escaped = Self::escape_selector(text);
 
-        let script = if multiple {
+        Ok(if multiple {
             format!(
                 r#"
                 (() => {{
@@ -218,9 +289,7 @@ impl ElementFinder {
                         document.body,
                         NodeFilter.SHOW_TEXT,
                         {{
-                            acceptNode: (node) => {{
-                                return node.textContent.includes('{}') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-                            }}
+                            acceptNode: (node) => node.textContent.includes('{}') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
                         }}
                     );
                     const results = [];
@@ -232,7 +301,7 @@ impl ElementFinder {
                             results.push({{
                                 element_id: el.id || 'text-' + i,
                                 tag_name: el.tagName.toLowerCase(),
-                                text_content: el.textContent ? el.textContent.substring(0, 100) : null
+                                text_content: el.textContent?.substring(0, 100) || null
                             }});
                             i++;
                         }}
@@ -250,9 +319,7 @@ impl ElementFinder {
                         document.body,
                         NodeFilter.SHOW_TEXT,
                         {{
-                            acceptNode: (node) => {{
-                                return node.textContent.includes('{}') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-                            }}
+                            acceptNode: (node) => node.textContent.includes('{}') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
                         }}
                     );
                     let node;
@@ -262,7 +329,7 @@ impl ElementFinder {
                             return JSON.stringify({{
                                 element_id: el.id || 'text-single',
                                 tag_name: el.tagName.toLowerCase(),
-                                text_content: el.textContent ? el.textContent.substring(0, 100) : null
+                                text_content: el.textContent?.substring(0, 100) || null
                             }});
                         }}
                     }}
@@ -271,9 +338,26 @@ impl ElementFinder {
                 "#,
                 text_escaped
             )
-        };
+        })
+    }
 
-        Ok(script)
+    /// Escape selector string for safe use in JavaScript
+    ///
+    /// Escapes backslashes, single quotes, and double quotes to prevent
+    /// JavaScript injection and syntax errors when embedding selectors in code.
+    ///
+    /// # Arguments
+    /// * `s` - The selector string to escape
+    ///
+    /// # Returns
+    /// Escaped string safe for JavaScript embedding
+    ///
+    /// # Examples
+    /// ```
+    /// assert_eq!(ElementFinder::escape_selector("button[title='Click']"), "button[title=\\'Click\\']");
+    /// ```
+    fn escape_selector(s: &str) -> String {
+        s.replace('\\', "\\\\").replace('\'', "\\'").replace('"', r#"\""#)
     }
 }
 

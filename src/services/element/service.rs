@@ -4,6 +4,7 @@
 
 use crate::error::{Error as ServiceError, Result as ServiceResult};
 use crate::services::element::finder::ElementFinder;
+use crate::services::element::js_utils::JsBuilder;
 use crate::services::traits::SelectorType;
 use crate::session::traits::{PageContext, SessionManager};
 use std::sync::Arc;
@@ -61,6 +62,31 @@ use crate::chaser_oxide::v1::{
     HtmlValue, BoundingBox, VisibilityResult, EnabledResult, ElementProperties,
 };
 
+/// Macro for handling simple element operation results (success/empty response)
+macro_rules! handle_simple_op {
+    ($result:expr, $response_type:ident, $op_name:expr, $success_ctor:expr, $error_ctor:expr) => {
+        match $result {
+            Ok(_) => {
+                let resp = $response_type {
+                    response: Some($success_ctor(Empty {})),
+                };
+                Response::new(resp)
+            }
+            Err(e) => {
+                error!("{} failed: {}", $op_name, e);
+                let resp = $response_type {
+                    response: Some($error_ctor(ProtoError {
+                        code: ErrorCode::ElementNotFound as i32,
+                        message: e.to_string(),
+                        details: Default::default(),
+                    })),
+                };
+                Response::new(resp)
+            }
+        }
+    };
+}
+
 /// ElementService gRPC server
 #[derive(Clone)]
 pub struct ElementGrpcService {
@@ -102,65 +128,33 @@ impl ElementGrpcService {
         }
     }
 
-    /// Convert selector and element info to JavaScript that returns the element
-    #[allow(dead_code)]
-    async fn resolve_element(
+    /// Execute JavaScript script and get string result
+    async fn execute_script(&self, page: &Arc<dyn PageContext>, script: &str) -> ServiceResult<String> {
+        let result = page.evaluate(script, true).await?;
+        Ok(match result {
+            crate::session::traits::EvaluationResult::String(s) => s,
+            crate::session::traits::EvaluationResult::Number(n) => n.to_string(),
+            crate::session::traits::EvaluationResult::Bool(b) => b.to_string(),
+            _ => String::new(),
+        })
+    }
+
+    /// Verify that an element exists
+    async fn verify_element_exists(
         &self,
         page: &Arc<dyn PageContext>,
         selector_type: i32,
         selector: &str,
-    ) -> ServiceResult<serde_json::Value> {
-        let script = match selector_type {
-            1 => {
-                let escaped = selector.replace("\x27", "\\\x27").replace("\\", "\\\\");
-                format!("document.querySelector({})", escaped)
-            }
-            2 => {
-                let escaped = selector.replace("\"", "\\\"").replace("\\", "\\\\");
-                format!(
-                    "document.evaluate(\"{}\", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
-                    escaped
-                )
-            }
-            3 => {
-                // Text selector - use TreeWalker
-                format!(
-                    r#"
-                    (() => {{
-                        const walker = document.createTreeWalker(
-                            document.body,
-                            NodeFilter.SHOW_TEXT,
-                            {{
-                                acceptNode: (node) => {{
-                                    return node.textContent.includes('{}') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-                                }}
-                            }}
-                        );
-                        let node;
-                        while (node = walker.nextNode()) {{
-                            return node.parentElement;
-                        }}
-                        return null;
-                    }})()
-                    "#,
-                    selector.replace('\\', "\\\\").replace('\"', "\\\"")
-                )
-            }
-            _ => return Err(ServiceError::internal(format!("Invalid selector type: {}", selector_type))),
-        };
-
-        let result = page.evaluate(&script, true).await?;
-
-        match result {
-            crate::session::traits::EvaluationResult::Null => Ok(serde_json::Value::Null),
-            crate::session::traits::EvaluationResult::Bool(b) => Ok(serde_json::json!(b)),
-            crate::session::traits::EvaluationResult::Number(n) => Ok(serde_json::json!(n)),
-            crate::session::traits::EvaluationResult::String(s) => Ok(serde_json::json!(s)),
-            crate::session::traits::EvaluationResult::Object(o) => Ok(o),
+    ) -> ServiceResult<bool> {
+        let selector_type = Self::convert_selector_type(selector_type)?;
+        let finder = ElementFinder::new(page.clone());
+        match finder.find_element(selector_type, selector).await {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
         }
     }
 
-    /// Execute JavaScript on element
+    /// Execute JavaScript on an element
     async fn execute_on_element(
         &self,
         page: &Arc<dyn PageContext>,
@@ -168,94 +162,10 @@ impl ElementGrpcService {
         selector: &str,
         js_code: &str,
     ) -> ServiceResult<String> {
-        let script = format!(
-            r#"
-            (() => {{
-                const el = {};
-                if (!el) return null;
-                {}
-            }})()
-            "#,
-            self.get_element_query_js(selector_type, selector)?,
-            js_code
-        );
-
-        let result = page.evaluate(&script, true).await?;
-
-        match result {
-            crate::session::traits::EvaluationResult::String(s) => Ok(s),
-            crate::session::traits::EvaluationResult::Number(n) => Ok(n.to_string()),
-            crate::session::traits::EvaluationResult::Bool(b) => Ok(b.to_string()),
-            _ => Ok(String::new()),
-        }
-    }
-
-    /// Get JavaScript query for element selection
-    fn get_element_query_js(&self, selector_type: i32, selector: &str) -> ServiceResult<String> {
-        match selector_type {
-            1 => Ok(format!("document.querySelector('{}')", selector.replace('\\', "\\\\").replace('\'', "\\'"))),
-            2 => Ok(format!(
-                "document.evaluate('{}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
-                selector.replace('\\', "\\\\").replace('\"', "\\\"")
-            )),
-            3 => {
-                Ok(format!(
-                    r#"
-                    (() => {{
-                        const walker = document.createTreeWalker(
-                            document.body,
-                            NodeFilter.SHOW_TEXT,
-                            {{
-                                acceptNode: (node) => {{
-                                    return node.textContent.includes('{}') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-                                }}
-                            }}
-                        );
-                        let node;
-                        while (node = walker.nextNode()) {{
-                            return node.parentElement;
-                        }}
-                        return null;
-                    }})()
-                    "#,
-                    selector.replace('\\', "\\\\").replace('\"', "\\\"")
-                ))
-            }
-            _ => Err(ServiceError::internal(format!("Invalid selector type: {}", selector_type))),
-        }
-    }
-
-    /// Verify that an element exists in the page
-    async fn verify_element_exists(
-        &self,
-        page: &Arc<dyn PageContext>,
-        selector_type: i32,
-        selector: &str,
-    ) -> ServiceResult<bool> {
-        // Get the element query expression
-        let query_expr = self.get_element_query_js(selector_type, selector)?;
-
-        // Build script to check if element exists
-        let script = format!(
-            r#"
-            (() => {{
-                try {{
-                    const el = {};
-                    return el !== null && typeof el !== 'undefined';
-                }} catch (e) {{
-                    return false;
-                }}
-            }})()
-            "#,
-            query_expr
-        );
-
-        let result = page.evaluate(&script, true).await?;
-
-        match result {
-            crate::session::traits::EvaluationResult::Bool(exists) => Ok(exists),
-            _ => Ok(false),
-        }
+        // Don't convert selector_type - JsBuilder expects the raw i32 value
+        let builder = JsBuilder::new(selector_type, selector.to_string());
+        let script = builder.execute_on_element(js_code)?;
+        self.execute_script(page, &script).await
     }
 }
 
@@ -355,38 +265,13 @@ impl ElementServiceTrait for ElementGrpcService {
         info!("Click request received");
 
         let req = request.into_inner();
-        let element_ref = req.element.ok_or_else(|| {
-            Status::invalid_argument("Element reference is required")
-        })?;
-
+        let element_ref = req.element.ok_or_else(|| Status::invalid_argument("Element reference is required"))?;
         let page = self.get_page(&element_ref.page_id).await?;
 
-        // Execute click using JavaScript
-        let js_code = r#"
-            el.scrollIntoView({behavior: 'smooth', block: 'center'});
-            el.click();
-            'clicked'
-        "#;
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector).click_script()?;
+        let result = self.execute_script(&page, &js).await;
 
-        match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
-            Ok(_) => {
-                let response = ClickResponse {
-                    response: Some(ClickResponseEnum::Success(Empty {})),
-                };
-                Ok(Response::new(response))
-            }
-            Err(e) => {
-                error!("Click failed: {}", e);
-                let response = ClickResponse {
-                    response: Some(ClickResponseEnum::Error(ProtoError {
-                        code: ErrorCode::ElementNotFound as i32,
-                        message: e.to_string(),
-                        details: Default::default(),
-                    })),
-                };
-                Ok(Response::new(response))
-            }
-        }
+        Ok(handle_simple_op!(result, ClickResponse, "Click", ClickResponseEnum::Success, ClickResponseEnum::Error))
     }
 
     #[instrument(skip(self, request))]
@@ -397,43 +282,14 @@ impl ElementServiceTrait for ElementGrpcService {
         info!("Type request received");
 
         let req = request.into_inner();
-        let element_ref = req.element.ok_or_else(|| {
-            Status::invalid_argument("Element reference is required")
-        })?;
-
+        let element_ref = req.element.ok_or_else(|| Status::invalid_argument("Element reference is required"))?;
         let page = self.get_page(&element_ref.page_id).await?;
 
-        // Execute type using JavaScript
-        let js_code = &format!(
-            r#"
-            el.focus();
-            el.value = '{}';
-            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            'typed'
-            "#,
-            req.text.replace('\\', "\\\\").replace('\'', "\\'")
-        );
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector)
+            .type_text_script(&req.text)?;
+        let result = self.execute_script(&page, &js).await;
 
-        match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
-            Ok(_) => {
-                let response = TypeResponse {
-                    response: Some(TypeResponseEnum::Success(Empty {})),
-                };
-                Ok(Response::new(response))
-            }
-            Err(e) => {
-                error!("Type failed: {}", e);
-                let response = TypeResponse {
-                    response: Some(TypeResponseEnum::Error(ProtoError {
-                        code: ErrorCode::ElementNotFound as i32,
-                        message: e.to_string(),
-                        details: Default::default(),
-                    })),
-                };
-                Ok(Response::new(response))
-            }
-        }
+        Ok(handle_simple_op!(result, TypeResponse, "Type", TypeResponseEnum::Success, TypeResponseEnum::Error))
     }
 
     #[instrument(skip(self, request))]
@@ -441,44 +297,14 @@ impl ElementServiceTrait for ElementGrpcService {
         info!("Fill request received");
 
         let req = request.into_inner();
-        let element_ref = req.element.ok_or_else(|| {
-            Status::invalid_argument("Element reference is required")
-        })?;
-
+        let element_ref = req.element.ok_or_else(|| Status::invalid_argument("Element reference is required"))?;
         let page = self.get_page(&element_ref.page_id).await?;
 
-        // Execute fill using JavaScript
-        let js_code = &format!(
-            r#"
-            el.focus();
-            if (el.clear) el.clear();
-            el.value = '{}';
-            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            'filled'
-            "#,
-            req.value.replace('\\', "\\\\").replace('\'', "\\'")
-        );
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector)
+            .fill_script(&req.value, req.clear_first)?;
+        let result = self.execute_script(&page, &js).await;
 
-        match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
-            Ok(_) => {
-                let response = FillResponse {
-                    response: Some(FillResponseEnum::Success(Empty {})),
-                };
-                Ok(Response::new(response))
-            }
-            Err(e) => {
-                error!("Fill failed: {}", e);
-                let response = FillResponse {
-                    response: Some(FillResponseEnum::Error(ProtoError {
-                        code: ErrorCode::ElementNotFound as i32,
-                        message: e.to_string(),
-                        details: Default::default(),
-                    })),
-                };
-                Ok(Response::new(response))
-            }
-        }
+        Ok(handle_simple_op!(result, FillResponse, "Fill", FillResponseEnum::Success, FillResponseEnum::Error))
     }
 
     #[instrument(skip(self, request))]
@@ -716,44 +542,13 @@ impl ElementServiceTrait for ElementGrpcService {
         info!("Hover request received");
 
         let req = request.into_inner();
-        let element_ref = req.element.ok_or_else(|| {
-            Status::invalid_argument("Element reference is required")
-        })?;
-
+        let element_ref = req.element.ok_or_else(|| Status::invalid_argument("Element reference is required"))?;
         let page = self.get_page(&element_ref.page_id).await?;
 
-        // Execute hover using JavaScript
-        let js_code = r#"
-            (() => {
-                const event = new MouseEvent('mouseover', {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                });
-                el.dispatchEvent(event);
-                return 'hovered';
-            })()
-        "#;
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector).hover_script()?;
+        let result = self.execute_script(&page, &js).await;
 
-        match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
-            Ok(_) => {
-                let response = HoverResponse {
-                    response: Some(HoverResponseEnum::Success(Empty {})),
-                };
-                Ok(Response::new(response))
-            }
-            Err(e) => {
-                error!("Hover failed: {}", e);
-                let response = HoverResponse {
-                    response: Some(HoverResponseEnum::Error(ProtoError {
-                        code: ErrorCode::ElementNotFound as i32,
-                        message: e.to_string(),
-                        details: Default::default(),
-                    })),
-                };
-                Ok(Response::new(response))
-            }
-        }
+        Ok(handle_simple_op!(result, HoverResponse, "Hover", HoverResponseEnum::Success, HoverResponseEnum::Error))
     }
 
     #[instrument(skip(self, request))]
@@ -761,39 +556,13 @@ impl ElementServiceTrait for ElementGrpcService {
         info!("Focus request received");
 
         let req = request.into_inner();
-        let element_ref = req.element.ok_or_else(|| {
-            Status::invalid_argument("Element reference is required")
-        })?;
-
+        let element_ref = req.element.ok_or_else(|| Status::invalid_argument("Element reference is required"))?;
         let page = self.get_page(&element_ref.page_id).await?;
 
-        // Execute focus using JavaScript
-        let js_code = r#"
-            (() => {
-                el.focus();
-                return 'focused';
-            })()
-        "#;
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector).focus_script()?;
+        let result = self.execute_script(&page, &js).await;
 
-        match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
-            Ok(_) => {
-                let response = FocusResponse {
-                    response: Some(FocusResponseEnum::Success(Empty {})),
-                };
-                Ok(Response::new(response))
-            }
-            Err(e) => {
-                error!("Focus failed: {}", e);
-                let response = FocusResponse {
-                    response: Some(FocusResponseEnum::Error(ProtoError {
-                        code: ErrorCode::ElementNotFound as i32,
-                        message: e.to_string(),
-                        details: Default::default(),
-                    })),
-                };
-                Ok(Response::new(response))
-            }
-        }
+        Ok(handle_simple_op!(result, FocusResponse, "Focus", FocusResponseEnum::Success, FocusResponseEnum::Error))
     }
 
     #[instrument(skip(self, request))]
@@ -807,52 +576,23 @@ impl ElementServiceTrait for ElementGrpcService {
         let element_ref = req.element.ok_or_else(|| {
             Status::invalid_argument("Element reference is required")
         })?;
-
         let page = self.get_page(&element_ref.page_id).await?;
 
         if req.values.is_empty() {
-            let response = SelectOptionResponse {
+            return Ok(Response::new(SelectOptionResponse {
                 response: Some(SelectOptionResponseEnum::Error(ProtoError {
                     code: ErrorCode::InvalidArgument as i32,
                     message: "At least one value must be provided".to_string(),
                     details: Default::default(),
                 })),
-            };
-            return Ok(Response::new(response));
+            }));
         }
 
-        // Execute select option using JavaScript
-        // For multiple values, we need to handle multi-select differently
-        let js_code = &format!(
-            r#"
-            (() => {{
-                el.value = '{}';
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                return 'selected';
-            }})()
-            "#,
-            req.values[0].replace('\\', "\\\\").replace('\'', "\\'")
-        );
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector)
+            .select_option_script(&req.values[0])?;
+        let result = self.execute_script(&page, &js).await;
 
-        match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
-            Ok(_) => {
-                let response = SelectOptionResponse {
-                    response: Some(SelectOptionResponseEnum::Success(Empty {})),
-                };
-                Ok(Response::new(response))
-            }
-            Err(e) => {
-                error!("SelectOption failed: {}", e);
-                let response = SelectOptionResponse {
-                    response: Some(SelectOptionResponseEnum::Error(ProtoError {
-                        code: ErrorCode::ElementNotFound as i32,
-                        message: e.to_string(),
-                        details: Default::default(),
-                    })),
-                };
-                Ok(Response::new(response))
-            }
-        }
+        Ok(handle_simple_op!(result, SelectOptionResponse, "SelectOption", SelectOptionResponseEnum::Success, SelectOptionResponseEnum::Error))
     }
 
     #[instrument(skip(self, request))]
@@ -926,40 +666,13 @@ impl ElementServiceTrait for ElementGrpcService {
         let element_ref = req.element.ok_or_else(|| {
             Status::invalid_argument("Element reference is required")
         })?;
-
         let page = self.get_page(&element_ref.page_id).await?;
 
-        // Execute scroll into view using JavaScript
-        let block_param = if req.align_to_top { "start" } else { "end" };
-        let js_code = &format!(
-            r#"
-            (() => {{
-                el.scrollIntoView({{ behavior: 'smooth', block: '{}' }});
-                return 'scrolled';
-            }})()
-            "#,
-            block_param
-        );
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector)
+            .scroll_into_view_script(req.align_to_top)?;
+        let result = self.execute_script(&page, &js).await;
 
-        match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
-            Ok(_) => {
-                let response = ScrollIntoViewResponse {
-                    response: Some(ScrollIntoViewResponseEnum::Success(Empty {})),
-                };
-                Ok(Response::new(response))
-            }
-            Err(e) => {
-                error!("ScrollIntoView failed: {}", e);
-                let response = ScrollIntoViewResponse {
-                    response: Some(ScrollIntoViewResponseEnum::Error(ProtoError {
-                        code: ErrorCode::ElementNotFound as i32,
-                        message: e.to_string(),
-                        details: Default::default(),
-                    })),
-                };
-                Ok(Response::new(response))
-            }
-        }
+        Ok(handle_simple_op!(result, ScrollIntoViewResponse, "ScrollIntoView", ScrollIntoViewResponseEnum::Success, ScrollIntoViewResponseEnum::Error))
     }
 
     #[instrument(skip(self, request))]
@@ -973,62 +686,47 @@ impl ElementServiceTrait for ElementGrpcService {
         let element_ref = req.element.ok_or_else(|| {
             Status::invalid_argument("Element reference is required")
         })?;
-
         let page = self.get_page(&element_ref.page_id).await?;
 
-        // Execute get bounding box using JavaScript
-        let js_code = r#"
-            (() => {
-                const rect = el.getBoundingClientRect();
-                return JSON.stringify({
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height
-                });
-            })()
-        "#;
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector)
+            .get_bounding_box_script()?;
 
-        let bbox_json = match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
+        let bbox_json = match self.execute_script(&page, &js).await {
             Ok(v) => v,
             Err(e) => {
                 error!("GetBoundingBox failed: {}", e);
-                let response = GetBoundingBoxResponse {
+                return Ok(Response::new(GetBoundingBoxResponse {
                     response: Some(GetBoundingBoxResponseEnum::Error(ProtoError {
                         code: ErrorCode::ElementNotFound as i32,
                         message: e.to_string(),
                         details: Default::default(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
-        // Parse JSON response
         let bbox: serde_json::Value = match serde_json::from_str(&bbox_json) {
             Ok(v) => v,
             Err(e) => {
                 error!("Failed to parse bounding box JSON: {}", e);
-                let response = GetBoundingBoxResponse {
+                return Ok(Response::new(GetBoundingBoxResponse {
                     response: Some(GetBoundingBoxResponseEnum::Error(ProtoError {
                         code: ErrorCode::Unknown as i32,
                         message: format!("Failed to parse bounding box: {}", e),
                         details: Default::default(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
-        let response = GetBoundingBoxResponse {
+        Ok(Response::new(GetBoundingBoxResponse {
             response: Some(GetBoundingBoxResponseEnum::Box(BoundingBox {
                 x: bbox["x"].as_f64().unwrap_or(0.0),
                 y: bbox["y"].as_f64().unwrap_or(0.0),
                 width: bbox["width"].as_f64().unwrap_or(0.0),
                 height: bbox["height"].as_f64().unwrap_or(0.0),
             })),
-        };
-        Ok(Response::new(response))
+        }))
     }
 
     #[instrument(skip(self, request))]
@@ -1042,79 +740,43 @@ impl ElementServiceTrait for ElementGrpcService {
         let element_ref = req.element.ok_or_else(|| {
             Status::invalid_argument("Element reference is required")
         })?;
-
         let page = self.get_page(&element_ref.page_id).await?;
 
-        // Execute visibility check using JavaScript
-        let js_code = r#"
-            (() => {
-                const style = window.getComputedStyle(el);
-                const rect = el.getBoundingClientRect();
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector)
+            .is_visible_script()?;
 
-                // Check if element is hidden via CSS
-                if (style.display === 'none') {
-                    return JSON.stringify({ visible: false, reason: 'display: none' });
-                }
-                if (style.visibility === 'hidden') {
-                    return JSON.stringify({ visible: false, reason: 'visibility: hidden' });
-                }
-                if (style.opacity === '0' || style.opacity === '0.0') {
-                    return JSON.stringify({ visible: false, reason: 'opacity: 0' });
-                }
-
-                // Check if element has zero size
-                if (rect.width === 0 || rect.height === 0) {
-                    return JSON.stringify({ visible: false, reason: 'zero size' });
-                }
-
-                // Check if element is outside viewport
-                if (rect.top < 0 && rect.bottom < 0) {
-                    return JSON.stringify({ visible: false, reason: 'above viewport' });
-                }
-                if (rect.top > window.innerHeight && rect.bottom > window.innerHeight) {
-                    return JSON.stringify({ visible: false, reason: 'below viewport' });
-                }
-
-                return JSON.stringify({ visible: true, reason: 'visible' });
-            })()
-        "#;
-
-        let result_json = match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
+        let result_json = match self.execute_script(&page, &js).await {
             Ok(v) => v,
             Err(e) => {
                 error!("IsVisible failed: {}", e);
-                let response = IsVisibleResponse {
+                return Ok(Response::new(IsVisibleResponse {
                     response: Some(IsVisibleResponseEnum::Error(ProtoError {
                         code: ErrorCode::ElementNotFound as i32,
                         message: e.to_string(),
                         details: Default::default(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
-        // Parse JSON response
         let result: serde_json::Value = match serde_json::from_str(&result_json) {
             Ok(v) => v,
             Err(_) => {
-                let response = IsVisibleResponse {
+                return Ok(Response::new(IsVisibleResponse {
                     response: Some(IsVisibleResponseEnum::Result(VisibilityResult {
                         is_visible: false,
                         reason: "Failed to parse visibility result".to_string(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
-        let response = IsVisibleResponse {
+        Ok(Response::new(IsVisibleResponse {
             response: Some(IsVisibleResponseEnum::Result(VisibilityResult {
                 is_visible: result["visible"].as_bool().unwrap_or(false),
                 reason: result["reason"].as_str().unwrap_or("").to_string(),
             })),
-        };
-        Ok(Response::new(response))
+        }))
     }
 
     #[instrument(skip(self, request))]
@@ -1128,71 +790,43 @@ impl ElementServiceTrait for ElementGrpcService {
         let element_ref = req.element.ok_or_else(|| {
             Status::invalid_argument("Element reference is required")
         })?;
-
         let page = self.get_page(&element_ref.page_id).await?;
 
-        // Execute enabled check using JavaScript
-        let js_code = r#"
-            (() => {
-                // Check if element is disabled
-                if (el.disabled) {
-                    return JSON.stringify({ enabled: false, reason: 'disabled attribute' });
-                }
+        let js = JsBuilder::new(element_ref.selector_type, element_ref.selector)
+            .is_enabled_script()?;
 
-                // Check if element is readonly (for inputs)
-                if (el.readOnly) {
-                    return JSON.stringify({ enabled: false, reason: 'readonly attribute' });
-                }
-
-                // Check if parent fieldset is disabled
-                let parent = el.parentElement;
-                while (parent) {
-                    if (parent.tagName === 'FIELDSET' && parent.disabled) {
-                        return JSON.stringify({ enabled: false, reason: 'parent fieldset disabled' });
-                    }
-                    parent = parent.parentElement;
-                }
-
-                return JSON.stringify({ enabled: true, reason: 'enabled' });
-            })()
-        "#;
-
-        let result_json = match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
+        let result_json = match self.execute_script(&page, &js).await {
             Ok(v) => v,
             Err(e) => {
                 error!("IsEnabled failed: {}", e);
-                let response = IsEnabledResponse {
+                return Ok(Response::new(IsEnabledResponse {
                     response: Some(IsEnabledResponseEnum::Error(ProtoError {
                         code: ErrorCode::ElementNotFound as i32,
                         message: e.to_string(),
                         details: Default::default(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
-        // Parse JSON response
         let result: serde_json::Value = match serde_json::from_str(&result_json) {
             Ok(v) => v,
             Err(_) => {
-                let response = IsEnabledResponse {
+                return Ok(Response::new(IsEnabledResponse {
                     response: Some(IsEnabledResponseEnum::Result(EnabledResult {
                         is_enabled: false,
                         reason: "Failed to parse enabled result".to_string(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
-        let response = IsEnabledResponse {
+        Ok(Response::new(IsEnabledResponse {
             response: Some(IsEnabledResponseEnum::Result(EnabledResult {
                 is_enabled: result["enabled"].as_bool().unwrap_or(true),
                 reason: result["reason"].as_str().unwrap_or("").to_string(),
             })),
-        };
-        Ok(Response::new(response))
+        }))
     }
 
     #[instrument(skip(self, request))]
@@ -1341,100 +975,38 @@ impl ElementServiceTrait for ElementGrpcService {
         let element_ref = req.element.ok_or_else(|| {
             Status::invalid_argument("Element reference is required")
         })?;
-
         let page = self.get_page(&element_ref.page_id).await?;
 
         if req.key.is_empty() {
-            let response = PressKeyResponse {
+            return Ok(Response::new(PressKeyResponse {
                 response: Some(PressKeyResponseEnum::Error(ProtoError {
                     code: ErrorCode::InvalidArgument as i32,
                     message: "Key must not be empty".to_string(),
                     details: Default::default(),
                 })),
-            };
-            return Ok(Response::new(response));
+            }));
         }
 
-        // Focus element first
-        let focus_js = r#"
-            (() => {
-                el.focus();
-                return 'focused';
-            })()
-        "#;
+        let builder = JsBuilder::new(element_ref.selector_type, element_ref.selector);
 
-        if let Err(e) = self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, focus_js).await {
+        // Focus element first
+        let focus_js = builder.focus_script()?;
+        if let Err(e) = self.execute_script(&page, &focus_js).await {
             error!("PressKey focus failed: {}", e);
-            let response = PressKeyResponse {
+            return Ok(Response::new(PressKeyResponse {
                 response: Some(PressKeyResponseEnum::Error(ProtoError {
                     code: ErrorCode::ElementNotFound as i32,
                     message: format!("Failed to focus element: {}", e),
                     details: Default::default(),
                 })),
-            };
-            return Ok(Response::new(response));
+            }));
         }
 
-        // Parse key combination (e.g., "Ctrl+A", "Shift+Enter")
-        let key_escaped = req.key.replace('\\', "\\\\").replace('\'', "\\'");
+        // Then press the key
+        let key_js = builder.press_key_script(&req.key)?;
+        let result = self.execute_script(&page, &key_js).await;
 
-        // For special keys and combinations, we need to dispatch keyboard events
-        let js_code = &format!(
-            r#"
-            (() => {{
-                const key = '{}';
-                // Dispatch keydown event
-                const keydownEvent = new KeyboardEvent('keydown', {{
-                    key: key,
-                    code: key,
-                    bubbles: true,
-                    cancelable: true
-                }});
-                el.dispatchEvent(keydownEvent);
-
-                // Dispatch keypress event
-                const keypressEvent = new KeyboardEvent('keypress', {{
-                    key: key,
-                    code: key,
-                    bubbles: true,
-                    cancelable: true
-                }});
-                el.dispatchEvent(keypressEvent);
-
-                // Dispatch keyup event
-                const keyupEvent = new KeyboardEvent('keyup', {{
-                    key: key,
-                    code: key,
-                    bubbles: true,
-                    cancelable: true
-                }});
-                el.dispatchEvent(keyupEvent);
-
-                return 'key_pressed';
-            }})()
-            "#,
-            key_escaped
-        );
-
-        match self.execute_on_element(&page, element_ref.selector_type, &element_ref.selector, js_code).await {
-            Ok(_) => {
-                let response = PressKeyResponse {
-                    response: Some(PressKeyResponseEnum::Success(Empty {})),
-                };
-                Ok(Response::new(response))
-            }
-            Err(e) => {
-                error!("PressKey failed: {}", e);
-                let response = PressKeyResponse {
-                    response: Some(PressKeyResponseEnum::Error(ProtoError {
-                        code: ErrorCode::ElementNotFound as i32,
-                        message: e.to_string(),
-                        details: Default::default(),
-                    })),
-                };
-                Ok(Response::new(response))
-            }
-        }
+        Ok(handle_simple_op!(result, PressKeyResponse, "PressKey", PressKeyResponseEnum::Success, PressKeyResponseEnum::Error))
     }
 
     #[instrument(skip(self, request))]
@@ -1456,73 +1028,63 @@ impl ElementServiceTrait for ElementGrpcService {
         let page = self.get_page(&source_element.page_id).await?;
 
         // Get bounding boxes for source and target elements
-        let bbox_js = r#"
-            (() => {
-                const rect = el.getBoundingClientRect();
-                return JSON.stringify({
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height
-                });
-            })()
-        "#;
+        let bbox_js = JsBuilder::new(0, "".to_string()).get_bounding_box_script()?;
 
-        let source_bbox_json = match self.execute_on_element(&page, source_element.selector_type, &source_element.selector, bbox_js).await {
+        let source_bbox_json = match self.execute_script(&page, &JsBuilder::new(source_element.selector_type, source_element.selector.clone())
+            .execute_on_element(&bbox_js).map_err(|_| ServiceError::ElementNotFound("Failed to build bbox script".to_string()))?).await
+        {
             Ok(v) => v,
             Err(e) => {
                 error!("DragAndDrop failed to get source bounding box: {}", e);
-                let response = DragAndDropResponse {
+                return Ok(Response::new(DragAndDropResponse {
                     response: Some(DragAndDropResponseEnum::Error(ProtoError {
                         code: ErrorCode::ElementNotFound as i32,
                         message: format!("Failed to get source element: {}", e),
                         details: Default::default(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
-        let target_bbox_json = match self.execute_on_element(&page, target_element.selector_type, &target_element.selector, bbox_js).await {
+        let target_bbox_json = match self.execute_script(&page, &JsBuilder::new(target_element.selector_type, target_element.selector.clone())
+            .execute_on_element(&bbox_js).map_err(|_| ServiceError::ElementNotFound("Failed to build bbox script".to_string()))?).await
+        {
             Ok(v) => v,
             Err(e) => {
                 error!("DragAndDrop failed to get target bounding box: {}", e);
-                let response = DragAndDropResponse {
+                return Ok(Response::new(DragAndDropResponse {
                     response: Some(DragAndDropResponseEnum::Error(ProtoError {
                         code: ErrorCode::ElementNotFound as i32,
                         message: format!("Failed to get target element: {}", e),
                         details: Default::default(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
         let source_bbox: serde_json::Value = match serde_json::from_str(&source_bbox_json) {
             Ok(v) => v,
             Err(_) => {
-                let response = DragAndDropResponse {
+                return Ok(Response::new(DragAndDropResponse {
                     response: Some(DragAndDropResponseEnum::Error(ProtoError {
                         code: ErrorCode::Unknown as i32,
                         message: "Failed to parse source bounding box".to_string(),
                         details: Default::default(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
         let target_bbox: serde_json::Value = match serde_json::from_str(&target_bbox_json) {
             Ok(v) => v,
             Err(_) => {
-                let response = DragAndDropResponse {
+                return Ok(Response::new(DragAndDropResponse {
                     response: Some(DragAndDropResponseEnum::Error(ProtoError {
                         code: ErrorCode::Unknown as i32,
                         message: "Failed to parse target bounding box".to_string(),
                         details: Default::default(),
                     })),
-                };
-                return Ok(Response::new(response));
+                }));
             }
         };
 
@@ -1541,7 +1103,6 @@ impl ElementServiceTrait for ElementGrpcService {
                 const targetX = {};
                 const targetY = {};
 
-                // Simulate drag and drop events
                 const dragStartEvent = new DragEvent('dragstart', {{
                     bubbles: true,
                     cancelable: true,
@@ -1572,25 +1133,10 @@ impl ElementServiceTrait for ElementGrpcService {
             source_x, source_y, target_x, target_y
         );
 
-        match self.execute_on_element(&page, source_element.selector_type, &source_element.selector, drag_drop_js).await {
-            Ok(_) => {
-                let response = DragAndDropResponse {
-                    response: Some(DragAndDropResponseEnum::Success(Empty {})),
-                };
-                Ok(Response::new(response))
-            }
-            Err(e) => {
-                error!("DragAndDrop failed: {}", e);
-                let response = DragAndDropResponse {
-                    response: Some(DragAndDropResponseEnum::Error(ProtoError {
-                        code: ErrorCode::ElementNotFound as i32,
-                        message: e.to_string(),
-                        details: Default::default(),
-                    })),
-                };
-                Ok(Response::new(response))
-            }
-        }
+        let result = self.execute_script(&page, &JsBuilder::new(source_element.selector_type, source_element.selector)
+            .execute_on_element(drag_drop_js).map_err(|_| ServiceError::ElementNotFound("Failed to build drag script".to_string()))?).await;
+
+        Ok(handle_simple_op!(result, DragAndDropResponse, "DragAndDrop", DragAndDropResponseEnum::Success, DragAndDropResponseEnum::Error))
     }
 }
 

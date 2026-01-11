@@ -5,30 +5,31 @@
 use crate::Error;
 use crate::services::event::dispatcher::{DispatcherEvent, EventDispatcher};
 use crate::services::traits::{ConsoleEvent, ConsoleLevel, EventType, NetworkEvent, PageEvent};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-/// Event type mapping from proto i32 values to EventType enum
-fn get_event_type_map() -> HashMap<i32, EventType> {
-    let mut m = HashMap::new();
-    m.insert(1, EventType::PageLoaded);
-    m.insert(2, EventType::PageNavigated);
-    m.insert(3, EventType::PageClosed);
-    m.insert(11, EventType::ConsoleLog);
-    m.insert(15, EventType::ConsoleError);
-    m.insert(17, EventType::RequestSent);
-    m.insert(18, EventType::ResponseReceived);
-    m.insert(21, EventType::JsException);
-    m.insert(24, EventType::DialogOpened);
-    m
-}
+// Compile-time event type mapping using PHF
+use phf::phf_map;
+
+/// Static event type mapping from proto i32 to EventType enum
+/// Uses compile-time hash map for O(1) lookup without runtime allocation
+static EVENT_TYPE_MAP: phf::Map<i32, EventType> = phf_map! {
+    1i32 => EventType::PageLoaded,
+    2i32 => EventType::PageNavigated,
+    3i32 => EventType::PageClosed,
+    11i32 => EventType::ConsoleLog,
+    15i32 => EventType::ConsoleError,
+    17i32 => EventType::RequestSent,
+    18i32 => EventType::ResponseReceived,
+    21i32 => EventType::JsException,
+    24i32 => EventType::DialogOpened,
+};
 
 /// Convert EventType enum to proto i32 value
-fn event_type_to_i32(event_type: EventType) -> i32 {
+const fn event_type_to_i32(event_type: EventType) -> i32 {
     match event_type {
         EventType::PageLoaded => 1,
         EventType::PageNavigated => 2,
@@ -71,9 +72,9 @@ impl EventGrpcService {
 
     /// Convert EventType from proto to trait
     fn convert_event_type(event_type: i32) -> std::result::Result<EventType, Error> {
-        get_event_type_map()
+        EVENT_TYPE_MAP
             .get(&event_type)
-            .cloned()
+            .copied()
             .ok_or_else(|| Error::internal(format!("Invalid event type: {}", event_type)))
     }
 

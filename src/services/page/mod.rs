@@ -18,22 +18,38 @@
 //! - `Wait`: 等待条件满足
 //! - `ClosePage`: 关闭页面
 //!
+//! ## 架构
+//!
+//! 服务被组织成多个功能模块：
+//! - [`service`][]: 主服务实现，委托给专门的处理器
+//! - [`handlers`][]: RPC 方法处理器，按功能分组
+//! - [`conversions`][]: 类型转换（proto <-> 内部）
+//! - [`response`][]: 响应构建辅助函数
+//! - [`scripts`]: JavaScript 脚本常量
+//!
 //! ## 使用示例
 //! ```rust,no_run
-//! use chaser_oxide::services::PageServiceGrpc;
+//! use chaser_oxide::services::page::Service;
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let service = PageServiceGrpc::new(/* session_manager */);
-//! // 通过 gRPC 客户端调用
-//! // let response = client.navigate(request).await?;
+//! # let session_manager = Arc::new(/* ... */);
+//! let service = Service::new(session_manager);
+//! // 服务现在可以通过 gRPC 使用
 //! # Ok(())
 //! # }
 //! ```
 
+// 公共模块
 pub mod service;
+pub mod conversions;
+pub mod response;
+pub mod scripts;
+pub mod handlers;
 
+// 测试模块
 #[cfg(test)]
 mod tests;
 
+// 重新导出主要类型
 pub use service::Service;

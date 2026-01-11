@@ -23,7 +23,7 @@ mod tests {
             ..Default::default()
         };
 
-        let opts = Service::<MockSessionManager>::proto_to_navigation_options(proto_opts);
+        let opts = crate::services::page::conversions::proto_to_navigation_options(proto_opts);
         assert_eq!(opts.timeout, 30000);
     }
 
@@ -32,7 +32,7 @@ mod tests {
         use crate::services::traits::EvaluationResult;
 
         let result = EvaluationResult::String("test".to_string());
-        let proto = Service::<MockSessionManager>::evaluation_result_to_proto(result);
+        let proto = crate::services::page::conversions::evaluation_result_to_proto(result);
         assert!(matches!(
             proto.response,
             Some(crate::chaser_oxide::v1::evaluation_result::Response::StringValue(_))

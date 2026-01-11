@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
+use tracing::{error, info};
 
 use crate::session::{SessionManager, BrowserOptions};
 use crate::services::traits::{BrowserInfo, BrowserVersion, BrowserStatus, PageInfo};
@@ -139,6 +140,8 @@ where
 
         match self.session_manager.create_browser(options).await {
             Ok(browser_id) => {
+                info!(browser_id = %browser_id, "Browser launched successfully");
+
                 let browser = self.session_manager.get_browser(&browser_id).await
                     .map_err(|e| Status::from(Error::internal(e.to_string())))?;
 
@@ -155,6 +158,11 @@ where
                 }))
             }
             Err(e) => {
+                error!(
+                    error = %e,
+                    "Failed to launch browser. Please ensure Chrome is running with --remote-debugging-port=9222"
+                );
+
                 Ok(Response::new(LaunchResponse {
                     response: Some(LaunchResponseEnum::Error(
                         Self::error_to_proto(e)

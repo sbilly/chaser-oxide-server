@@ -32,6 +32,27 @@ impl ScriptInjectorImpl {
     fn generate_script_id(&self) -> String {
         Uuid::new_v4().to_string()
     }
+
+    /// Track injected script
+    async fn track_script(&self, page_id: &str, script_id: String, script_type: ScriptType, content: String) {
+        let injected = InjectedScript {
+            script_id,
+            script_type,
+            content,
+        };
+
+        let mut tracker = self.injected_scripts.write().await;
+        tracker
+            .entry(page_id.to_string())
+            .or_insert_with(Vec::new)
+            .push(injected);
+    }
+
+    /// Get CDP client for page
+    async fn get_cdp_client(&self, page_id: &str) -> Result<Arc<dyn crate::cdp::CdpClient>, Error> {
+        let page = self.session_manager.get_page(page_id).await?;
+        Ok(page.get_cdp_client())
+    }
 }
 
 #[async_trait]
@@ -39,78 +60,41 @@ impl ScriptInjector for ScriptInjectorImpl {
     /// Inject JavaScript before page load
     async fn inject_init_script(&self, page_id: &str, script: &str) -> Result<(), Error> {
         let script_id = self.generate_script_id();
-
         tracing::debug!("[P5-DEBUG] Injecting script for page {}: {} bytes", page_id, script.len());
 
-        // Get the page's CDP client from session manager
-        let page = self.session_manager.get_page(page_id).await?;
-        let cdp_client = page.get_cdp_client();
+        let cdp_client = self.get_cdp_client(page_id).await?;
 
-        // Use Page.addScriptToEvaluateOnNewDocument for future navigations
-        let params = serde_json::json!({
-            "source": script
-        });
-
-        let add_script_result = cdp_client
-            .call_method("Page.addScriptToEvaluateOnNewDocument", params)
-            .await;
-
-        match &add_script_result {
+        // Add script to evaluate on new document
+        let params = serde_json::json!({ "source": script });
+        match cdp_client.call_method("Page.addScriptToEvaluateOnNewDocument", params).await {
             Ok(result) => {
                 if let Some(identifier) = result.get("identifier") {
-                    tracing::debug!("[P5-DEBUG] Page.addScriptToEvaluateOnNewDocument SUCCESS, identifier: {}", identifier);
-                } else {
-                    tracing::debug!("[P5-DEBUG] Page.addScriptToEvaluateOnNewDocument SUCCESS (no identifier in response): {:?}", result);
+                    tracing::debug!("[P5-DEBUG] Script added with identifier: {}", identifier);
                 }
             }
             Err(e) => {
-                tracing::error!("[P5-DEBUG] Page.addScriptToEvaluateOnNewDocument FAILED: {}", e);
+                tracing::error!("[P5-DEBUG] Failed to add script: {}", e);
                 return Err(Error::internal(format!("Page.addScriptToEvaluateOnNewDocument failed: {}", e)));
             }
         }
 
-        // Also evaluate immediately for the current page (if already loaded)
-        // This ensures the script takes effect on the current page too
+        // Evaluate immediately for current page
         let eval_params = serde_json::json!({
             "expression": script,
             "awaitPromise": true
         });
 
-        let eval_result = cdp_client
-            .call_method("Runtime.evaluate", eval_params)
-            .await;
-
-        match &eval_result {
-            Ok(result) => {
-                tracing::debug!("[P5-DEBUG] Runtime.evaluate SUCCESS: {:?}", result);
-            }
-            Err(e) => {
-                tracing::warn!("[P5-DEBUG] Runtime.evaluate failed (non-critical): {}", e);
-                // Don't fail on Runtime.evaluate error, the addScriptToEvaluateOnNewDocument is more important
-            }
+        if let Err(e) = cdp_client.call_method("Runtime.evaluate", eval_params).await {
+            tracing::warn!("[P5-DEBUG] Runtime.evaluate failed (non-critical): {}", e);
         }
 
-        // Track injected script
-        let injected = InjectedScript {
-            script_id: script_id.clone(),
-            script_type: ScriptType::InitScript,
-            content: script.to_string(),
-        };
-
-        let mut tracker = self.injected_scripts.write().await;
-        tracker
-            .entry(page_id.to_string())
-            .or_insert_with(Vec::new)
-            .push(injected);
-
+        self.track_script(page_id, script_id, ScriptType::InitScript, script.to_string()).await;
         Ok(())
     }
 
     /// Evaluate JavaScript in the page
     async fn evaluate(&self, page_id: &str, script: &str) -> Result<String, Error> {
-        // Get the page's CDP client from session manager
-        let page = self.session_manager.get_page(page_id).await?;
-        let cdp_client = page.get_cdp_client();
+        let cdp_client = self.get_cdp_client(page_id).await?;
 
         let params = serde_json::json!({
             "expression": script,
@@ -118,67 +102,39 @@ impl ScriptInjector for ScriptInjectorImpl {
             "returnByValue": true
         });
 
-        let result = cdp_client
-            .call_method("Runtime.evaluate", params)
-            .await?;
+        let result = cdp_client.call_method("Runtime.evaluate", params).await?;
 
-        // Extract result value
-        if let Some(result_obj) = result.get("result") {
-            if let Some(value) = result_obj.get("value") {
-                return Ok(value.to_string());
-            }
-        }
-
-        Ok(String::new())
+        result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .map(|v| v.to_string())
+            .ok_or_else(|| Error::ScriptExecutionFailed("No result value".to_string()))
     }
 
     /// Inject CSS
     async fn inject_style(&self, page_id: &str, css: &str) -> Result<(), Error> {
+        let escaped_css = css.replace('\\', "\\\\").replace('\'', "\\'");
         let script = format!(
             r#"(function() {{
                 const style = document.createElement('style');
                 style.textContent = '{}';
                 document.head.appendChild(style);
             }})();"#,
-            css.replace('\\', "\\\\").replace('\'', "\\'")
+            escaped_css
         );
 
         self.evaluate(page_id, &script).await?;
-
-        // Track injected style
-        let injected = InjectedScript {
-            script_id: self.generate_script_id(),
-            script_type: ScriptType::Style,
-            content: css.to_string(),
-        };
-
-        let mut tracker = self.injected_scripts.write().await;
-        tracker
-            .entry(page_id.to_string())
-            .or_insert_with(Vec::new)
-            .push(injected);
-
+        self.track_script(page_id, self.generate_script_id(), ScriptType::Style, css.to_string()).await;
         Ok(())
     }
 
     /// Set User-Agent at CDP protocol level
     async fn set_user_agent(&self, page_id: &str, user_agent: &str) -> Result<(), Error> {
-        // Get the page's CDP client from session manager
-        let page = self.session_manager.get_page(page_id).await?;
-        let cdp_client = page.get_cdp_client();
-
-        // Enable Network domain first
+        let cdp_client = self.get_cdp_client(page_id).await?;
         cdp_client.enable_domain("Network").await?;
 
-        // Set User-Agent override using Network.setUserAgentOverride
-        let params = serde_json::json!({
-            "userAgent": user_agent
-        });
-
-        cdp_client
-            .call_method("Network.setUserAgentOverride", params)
-            .await?;
-
+        let params = serde_json::json!({ "userAgent": user_agent });
+        cdp_client.call_method("Network.setUserAgentOverride", params).await?;
         Ok(())
     }
 

@@ -56,7 +56,7 @@ impl BrowserContext for BrowserContextImpl {
         }
 
         // Determine the URL for the new page
-        let default_url = options.default_url.as_ref().map(|s| s.as_str()).unwrap_or("about:blank");
+        let default_url = options.default_url.as_deref().unwrap_or("about:blank");
 
         // Create a new target and get its WebSocket URL using CDP Target.createTarget
         let ws_url = self.cdp_browser.create_target(default_url).await?;
@@ -121,6 +121,8 @@ impl BrowserContext for BrowserContextImpl {
     }
 
     async fn close(&self) -> Result<(), Error> {
+        tracing::info!("BrowserContext::close: Closing browser {}", self.id);
+
         // Close all pages - collect pages first to avoid holding lock across await
         let pages_to_close: Vec<Arc<dyn PageContext>> = self
             .pages
@@ -131,8 +133,46 @@ impl BrowserContext for BrowserContextImpl {
             .collect();
         // Lock guard dropped here
 
-        for page in pages_to_close {
-            let _ = page.close().await;
+        let page_count = pages_to_close.len();
+        tracing::info!("BrowserContext::close: Closing {} pages for browser {}", page_count, self.id);
+
+        let mut success_count = 0;
+        let mut failed_pages = Vec::new();
+
+        for page in &pages_to_close {
+            tracing::debug!("BrowserContext::close: Closing page {} in browser {}", page.id(), self.id);
+            match page.close().await {
+                Ok(_) => {
+                    success_count += 1;
+                    tracing::debug!("BrowserContext::close: Successfully closed page {}", page.id());
+                }
+                Err(e) => {
+                    let page_id = page.id();
+                    tracing::warn!("BrowserContext::close: Failed to close page {}: {}", page_id, e);
+                    failed_pages.push((page_id.to_string(), e));
+                }
+            }
+        }
+
+        if !failed_pages.is_empty() {
+            tracing::warn!("BrowserContext::close: {} pages failed to close:", failed_pages.len());
+            for (page_id, error) in &failed_pages {
+                tracing::warn!("  - Page {}: {}", page_id, error);
+            }
+        }
+
+        tracing::info!("BrowserContext::close: Page close summary: {} succeeded, {} failed",
+            success_count, failed_pages.len());
+
+        // Close CDP browser connections (this closes WebSocket connections)
+        tracing::info!("BrowserContext::close: Closing CDP browser connections for {}", self.id);
+        match self.cdp_browser.close().await {
+            Ok(_) => {
+                tracing::info!("BrowserContext::close: CDP browser connections closed successfully");
+            }
+            Err(e) => {
+                tracing::warn!("BrowserContext::close: Failed to close CDP browser connections: {}", e);
+            }
         }
 
         // Mark as inactive
@@ -141,6 +181,7 @@ impl BrowserContext for BrowserContextImpl {
             .write()
             .map_err(|e| Error::internal(format!("Lock error: {}", e)))? = false;
 
+        tracing::info!("BrowserContext::close: Browser {} close completed", self.id);
         Ok(())
     }
 

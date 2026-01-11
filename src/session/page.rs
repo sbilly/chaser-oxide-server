@@ -201,7 +201,38 @@ impl PageContext for PageContextImpl {
     }
 
     async fn close(&self) -> Result<(), Error> {
+        tracing::info!("PageContext::close: Closing page {}", self.id);
+
+        // Check if page is still active before attempting close
+        let active = *self.is_active.read().await;
+        if !active {
+            tracing::warn!("PageContext::close: Page {} is already inactive", self.id);
+            return Ok(());
+        }
+
+        // Try to close the page via CDP - Page.close command will close the page in the browser
+        tracing::debug!("PageContext::close: Sending Page.close CDP command for page {}", self.id);
+        let close_result = self
+            .cdp_client
+            .call_method("Page.close", serde_json::json!({}))
+            .await;
+
+        match &close_result {
+            Ok(_) => {
+                tracing::info!("PageContext::close: Page.close CDP command succeeded for page {}", self.id);
+            }
+            Err(e) => {
+                tracing::warn!("PageContext::close: Page.close CDP command failed for page {}: {}", self.id, e);
+                tracing::warn!("PageContext::close: The page may not be closed in the browser");
+            }
+        }
+
+        // Mark as inactive regardless of CDP result
+        // This ensures the page context is removed from browser's management
+        tracing::debug!("PageContext::close: Marking page {} as inactive", self.id);
         *self.is_active.write().await = false;
+
+        tracing::info!("PageContext::close: Page {} close completed", self.id);
         Ok(())
     }
 

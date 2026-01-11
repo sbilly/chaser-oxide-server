@@ -46,6 +46,7 @@
 
 pub mod finder;
 pub mod interactor;
+pub mod js_utils;
 pub mod service;
 
 #[cfg(test)]

@@ -15,6 +15,7 @@
 //!
 //! ## 模块结构
 //! - `traits`: 服务层的核心 trait 定义
+//! - `common`: gRPC 服务公共工具和宏
 //! - `browser`: 浏览器服务实现
 //! - `page`: 页面服务实现
 //! - `element`: 元素服务实现
@@ -31,6 +32,7 @@
 
 
 pub mod traits;
+pub mod common;
 pub mod browser;
 pub mod page;
 pub mod profile;

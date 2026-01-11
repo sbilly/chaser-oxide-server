@@ -93,17 +93,12 @@ impl Default for ScreenshotOptions {
 }
 
 /// Screenshot format
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum ScreenshotFormat {
+    #[default]
     Png,
     Jpeg,
     WebP,
-}
-
-impl Default for ScreenshotFormat {
-    fn default() -> Self {
-        Self::Png
-    }
 }
 
 /// Clip region for screenshots

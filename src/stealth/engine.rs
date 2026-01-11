@@ -100,72 +100,46 @@ impl StealthEngine for StealthEngineImpl {
         page_id: &str,
         fingerprint: &services::NavigatorFingerprint,
     ) -> Result<(), Error> {
-        tracing::debug!("[P5-DEBUG] inject_navigator called for page {}: platform={}, vendor={}, hardwareConcurrency={}, deviceMemory={:?}, language={}",
-            page_id, fingerprint.platform, fingerprint.vendor, fingerprint.hardware_concurrency, fingerprint.device_memory, fingerprint.language);
-
-        let script = format!(
-            r#"(function() {{
-                Object.defineProperty(navigator, 'platform', {{
-                    get: () => '{}'
-                }});
-
-                Object.defineProperty(navigator, 'vendor', {{
-                    get: () => '{}'
-                }});
-
-                Object.defineProperty(navigator, 'hardwareConcurrency', {{
-                    get: () => {}
-                }});
-
-                Object.defineProperty(navigator, 'deviceMemory', {{
-                    get: () => {}
-                }});
-
-                Object.defineProperty(navigator, 'language', {{
-                    get: () => '{}'
-                }});
-
-                // Clear webdriver flag
-                Object.defineProperty(navigator, 'webdriver', {{
-                    get: () => false
-                }});
-
-                // Override plugins
-                Object.defineProperty(navigator, 'plugins', {{
-                    get: () => {{
-                        const plugins = [
-                            {{
-                                0: {{ type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format" }},
-                                description: "Portable Document Format",
-                                filename: "internal-pdf-viewer",
-                                length: 1,
-                                name: "Chrome PDF Plugin"
-                            }},
-                            {{
-                                0: {{ type: "application/pdf", suffixes: "pdf", description: "" }},
-                                description: "",
-                                filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai",
-                                length: 1,
-                                name: "Chrome PDF Viewer"
-                            }}
-                        ];
-                        plugins.length = 2;
-                        return plugins;
-                    }}
-                }});
-            }})();"#,
+        tracing::debug!(
+            "[P5-DEBUG] Injecting navigator for page {}: platform={}, vendor={}, cores={}, memory={:?}, lang={}",
+            page_id,
             fingerprint.platform,
             fingerprint.vendor,
             fingerprint.hardware_concurrency,
-            fingerprint.device_memory.unwrap_or(8),
+            fingerprint.device_memory,
             fingerprint.language
         );
 
-        self.injector
-            .inject_init_script(page_id, &script)
-            .await?;
+        let device_memory = fingerprint.device_memory.unwrap_or(8);
+        let script = format!(
+            r#"(function() {{
+                Object.defineProperty(navigator, 'platform', {{ get: () => '{}' }});
+                Object.defineProperty(navigator, 'vendor', {{ get: () => '{}' }});
+                Object.defineProperty(navigator, 'hardwareConcurrency', {{ get: () => {} }});
+                Object.defineProperty(navigator, 'deviceMemory', {{ get: () => {} }});
+                Object.defineProperty(navigator, 'language', {{ get: () => '{}' }});
+                Object.defineProperty(navigator, 'webdriver', {{ get: () => false }});
+                Object.defineProperty(navigator, 'plugins', {{ get: () => [
+                    {{
+                        0: {{ type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format" }},
+                        description: "Portable Document Format",
+                        filename: "internal-pdf-viewer",
+                        length: 1,
+                        name: "Chrome PDF Plugin"
+                    }},
+                    {{
+                        0: {{ type: "application/pdf", suffixes: "pdf", description: "" }},
+                        description: "",
+                        filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai",
+                        length: 1,
+                        name: "Chrome PDF Viewer"
+                    }}
+                ]}});
+            }})();"#,
+            fingerprint.platform, fingerprint.vendor, fingerprint.hardware_concurrency, device_memory, fingerprint.language
+        );
 
-        Ok(())
+        self.injector.inject_init_script(page_id, &script).await
     }
 
     /// Inject screen overrides
@@ -174,49 +148,22 @@ impl StealthEngine for StealthEngineImpl {
         page_id: &str,
         fingerprint: &services::ScreenFingerprint,
     ) -> Result<(), Error> {
+        let avail_height = fingerprint.height - 40;
         let script = format!(
             r#"(function() {{
-                Object.defineProperty(screen, 'width', {{
-                    get: () => {}
-                }});
-
-                Object.defineProperty(screen, 'height', {{
-                    get: () => {}
-                }});
-
-                Object.defineProperty(screen, 'colorDepth', {{
-                    get: () => {}
-                }});
-
-                Object.defineProperty(screen, 'pixelDepth', {{
-                    get: () => {}
-                }});
-
-                Object.defineProperty(screen, 'availWidth', {{
-                    get: () => {}
-                }});
-
-                Object.defineProperty(screen, 'availHeight', {{
-                    get: () => {}
-                }});
-
-                Object.defineProperty(window, 'devicePixelRatio', {{
-                    get: () => 1.0
-                }});
+                Object.defineProperty(screen, 'width', {{ get: () => {} }});
+                Object.defineProperty(screen, 'height', {{ get: () => {} }});
+                Object.defineProperty(screen, 'colorDepth', {{ get: () => {} }});
+                Object.defineProperty(screen, 'pixelDepth', {{ get: () => {} }});
+                Object.defineProperty(screen, 'availWidth', {{ get: () => {} }});
+                Object.defineProperty(screen, 'availHeight', {{ get: () => {} }});
+                Object.defineProperty(window, 'devicePixelRatio', {{ get: () => 1.0 }});
             }})();"#,
-            fingerprint.width,
-            fingerprint.height,
-            fingerprint.color_depth,
-            fingerprint.pixel_depth,
-            fingerprint.width,
-            fingerprint.height - 40
+            fingerprint.width, fingerprint.height, fingerprint.color_depth,
+            fingerprint.pixel_depth, fingerprint.width, avail_height
         );
 
-        self.injector
-            .inject_init_script(page_id, &script)
-            .await?;
-
-        Ok(())
+        self.injector.inject_init_script(page_id, &script).await
     }
 
     /// Inject WebGL protection
@@ -229,84 +176,58 @@ impl StealthEngine for StealthEngineImpl {
             r#"(function() {{
                 const getParameter = WebGLRenderingContext.prototype.getParameter;
                 WebGLRenderingContext.prototype.getParameter = function(parameter) {{
-                    if (parameter === 37445) {{
-                        return '{}';
-                    }}
-                    if (parameter === 37446) {{
-                        return '{}';
-                    }}
+                    if (parameter === 37445) return '{}';
+                    if (parameter === 37446) return '{}';
                     return getParameter.call(this, parameter);
                 }};
 
-                // Override getSupportedExtensions
                 const getSupportedExtensions = WebGLRenderingContext.prototype.getSupportedExtensions;
                 WebGLRenderingContext.prototype.getSupportedExtensions = function() {{
-                    const extensions = getSupportedExtensions.call(this);
-                    // Shuffle extensions for uniqueness
-                    return extensions.sort(() => Math.random() - 0.5);
+                    return getSupportedExtensions.call(this).sort(() => Math.random() - 0.5);
                 }};
             }})();"#,
             fingerprint.vendor, fingerprint.renderer
         );
 
-        self.injector
-            .inject_init_script(page_id, &script)
-            .await?;
-
-        Ok(())
+        self.injector.inject_init_script(page_id, &script).await
     }
 
     /// Inject canvas protection
     async fn inject_canvas(&self, page_id: &str) -> Result<(), Error> {
         let script = r#"(function() {
+            const addNoise = (data) => {
+                for (let i = 0; i < data.length; i += 4) {
+                    data[i] += Math.random() * 0.1;
+                    data[i + 1] += Math.random() * 0.1;
+                    data[i + 2] += Math.random() * 0.1;
+                }
+            };
+
             const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
             HTMLCanvasElement.prototype.toDataURL = function(type) {
                 const context = this.getContext('2d');
                 if (context) {
                     const imageData = context.getImageData(0, 0, this.width, this.height);
-                    for (let i = 0; i < imageData.data.length; i += 4) {
-                        // Add slight noise to canvas
-                        imageData.data[i] += Math.random() * 0.1;
-                        imageData.data[i + 1] += Math.random() * 0.1;
-                        imageData.data[i + 2] += Math.random() * 0.1;
-                    }
+                    addNoise(imageData.data);
                     context.putImageData(imageData, 0, 0);
                 }
                 return originalToDataURL.apply(this, arguments);
             };
 
-            // Override getImageData
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function() {
                 const imageData = originalGetImageData.apply(this, arguments);
-                for (let i = 0; i < imageData.data.length; i += 4) {
-                    imageData.data[i] += Math.random() * 0.1;
-                    imageData.data[i + 1] += Math.random() * 0.1;
-                    imageData.data[i + 2] += Math.random() * 0.1;
-                }
+                addNoise(imageData.data);
                 return imageData;
             };
         })();"#;
 
-        self.injector
-            .inject_init_script(page_id, script)
-            .await?;
-
-        Ok(())
+        self.injector.inject_init_script(page_id, script).await
     }
 
     /// Inject audio protection
     async fn inject_audio(&self, page_id: &str) -> Result<(), Error> {
         let script = r#"(function() {
-            const originalCreateChannelMerger = AudioContext.prototype.createChannelMerger;
-            AudioContext.prototype.createChannelMerger = function() {
-                const merger = originalCreateChannelMerger.apply(this, arguments);
-                // Add noise to audio fingerprint
-                return merger;
-            };
-
-            // Override audio fingerprint
-            const audioContext = new AudioContext();
             const originalGetChannelData = AudioBuffer.prototype.getChannelData;
             AudioBuffer.prototype.getChannelData = function() {
                 const data = originalGetChannelData.apply(this, arguments);
@@ -317,11 +238,7 @@ impl StealthEngine for StealthEngineImpl {
             };
         })();"#;
 
-        self.injector
-            .inject_init_script(page_id, script)
-            .await?;
-
-        Ok(())
+        self.injector.inject_init_script(page_id, script).await
     }
 
     /// Get applied features

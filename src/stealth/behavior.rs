@@ -31,29 +31,26 @@ impl BehaviorSimulatorImpl {
         Self { cdp_client }
     }
 
-    /// Generate Bezier curve for mouse movement
+    /// Generate Bezier curve path for mouse movement
     fn generate_bezier_path(
         start: (f64, f64),
         end: (f64, f64),
         options: &MouseMoveOptions,
     ) -> Vec<(f64, f64)> {
-        let mut rng = rand::thread_rng();
+        let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+        let deviation = options.deviation;
 
-        // Generate control points with deviation
-        let dx = end.0 - start.0;
-        let dy = end.1 - start.1;
-
+        // Generate control points with random deviation
         let cp1 = (
-            start.0 + dx * 0.25 + (rng.gen::<f64>() - 0.5) * options.deviation,
-            start.1 + dy * 0.25 + (rng.gen::<f64>() - 0.5) * options.deviation,
+            start.0 + dx * 0.25 + (rand::random::<f64>() - 0.5) * deviation,
+            start.1 + dy * 0.25 + (rand::random::<f64>() - 0.5) * deviation,
         );
 
         let cp2 = (
-            end.0 - dx * 0.25 + (rng.gen::<f64>() - 0.5) * options.deviation,
-            end.1 - dy * 0.25 + (rng.gen::<f64>() - 0.5) * options.deviation,
+            end.0 - dx * 0.25 + (rand::random::<f64>() - 0.5) * deviation,
+            end.1 - dy * 0.25 + (rand::random::<f64>() - 0.5) * deviation,
         );
 
-        // Create cubic Bezier curve
         let bezier = Bezier::from_cubic_coordinates(
             start.0, start.1,
             cp1.0, cp1.1,
@@ -61,25 +58,19 @@ impl BehaviorSimulatorImpl {
             end.0, end.1,
         );
 
-        // Generate intermediate points
-        let mut path = Vec::new();
-        for i in 0..=options.points {
-            let t = i as f64 / options.points as f64;
-            let point = bezier.evaluate(bezier_rs::TValue::Euclidean(t));
-            path.push((point[0], point[1]));
-        }
-
-        path
+        (0..=options.points)
+            .map(|i| {
+                let t = i as f64 / options.points as f64;
+                let point = bezier.evaluate(bezier_rs::TValue::Euclidean(t));
+                (point[0], point[1])
+            })
+            .collect()
     }
 
-    /// Calculate typing delay
+    /// Calculate typing delay with Gaussian distribution
     fn calculate_typing_delay(options: &TypingOptions) -> u64 {
-        let mut rng = rand::thread_rng();
-
-        // Use Gaussian distribution for realistic typing
-        let delay = (rng.gen::<f64>() * 2.0 - 1.0) * options.std_dev_ms as f64
+        let delay = (rand::random::<f64>() * 2.0 - 1.0) * options.std_dev_ms as f64
             + options.mean_delay_ms as f64;
-
         delay.max(10.0) as u64
     }
 }
@@ -124,60 +115,41 @@ impl BehaviorSimulator for BehaviorSimulatorImpl {
         text: &str,
         options: TypingOptions,
     ) -> Result<(), Error> {
-        // Pre-generate all random decisions to avoid holding ThreadRng across await
-        let (typing_actions, _chars): (Vec<Vec<TypingAction>>, Vec<char>) = {
-            let mut rng = rand::thread_rng();
-            let chars_vec: Vec<char> = text.chars().collect();
-            let mut actions = Vec::new();
+        // Focus element
+        let focus_params = serde_json::json!({ "objectId": element_id });
+        self.cdp_client.call_method("DOM.focus", focus_params).await?;
 
-            for ch in &chars_vec {
-                let mut char_actions = Vec::new();
+        // Pre-generate typing actions to avoid Send issues
+        let typing_actions: Vec<Vec<TypingAction>> = text
+            .chars()
+            .map(|ch| {
+                let mut actions = Vec::new();
 
-                // Check for typo
-                if rng.gen::<f64>() < options.typo_probability {
-                    let wrong_char = rng.gen_range('a'..='z');
-                    char_actions.push(TypingAction::WrongChar(wrong_char));
-                    char_actions.push(TypingAction::Delay(100));
-                    char_actions.push(TypingAction::Backspace);
-                    char_actions.push(TypingAction::Delay(200));
+                // Simulate typo
+                if rand::random::<f64>() < options.typo_probability {
+                    actions.push(TypingAction::WrongChar(rand::random::<char>()));
+                    actions.push(TypingAction::Delay(100));
+                    actions.push(TypingAction::Backspace);
+                    actions.push(TypingAction::Delay(200));
                 }
 
-                // Check for backspace simulation
-                if rng.gen::<f64>() < options.backspace_probability {
-                    char_actions.push(TypingAction::Backspace);
-                    char_actions.push(TypingAction::Delay(150));
+                // Simulate accidental backspace
+                if rand::random::<f64>() < options.backspace_probability {
+                    actions.push(TypingAction::Backspace);
+                    actions.push(TypingAction::Delay(150));
                 }
 
-                // Type actual character
-                char_actions.push(TypingAction::TypeChar(*ch));
+                actions.push(TypingAction::TypeChar(ch));
+                actions.push(TypingAction::Delay(Self::calculate_typing_delay(&options) as u32));
+                actions
+            })
+            .collect();
 
-                // Realistic delay between keystrokes
-                let delay = Self::calculate_typing_delay(&options);
-                char_actions.push(TypingAction::Delay(delay as u32));
-
-                actions.push(char_actions);
-            }
-            // rng dropped here
-            (actions, chars_vec)
-        };
-
-        // Focus element first
-        let focus_params = serde_json::json!({
-            "objectId": element_id
-        });
-
-        self.cdp_client
-            .call_method("DOM.focus", focus_params)
-            .await?;
-
-        // Execute pre-generated typing actions
+        // Execute actions
         for actions in typing_actions {
             for action in actions {
                 match action {
-                    TypingAction::TypeChar(c) => {
-                        self.type_char(page_id, c).await?;
-                    }
-                    TypingAction::WrongChar(c) => {
+                    TypingAction::TypeChar(c) | TypingAction::WrongChar(c) => {
                         self.type_char(page_id, c).await?;
                     }
                     TypingAction::Backspace => {
@@ -200,74 +172,30 @@ impl BehaviorSimulator for BehaviorSimulatorImpl {
         element_id: &str,
         options: ClickOptions,
     ) -> Result<(), Error> {
-        // Get element position
-        let params = serde_json::json!({
-            "objectId": element_id
-        });
-
-        let result = self
-            .cdp_client
-            .call_method("DOM.getBoxModel", params)
-            .await?;
-
-        // Extract center position
-        let model = result
-            .get("model")
-            .ok_or_else(|| Error::ScriptExecutionFailed("No box model found".to_string()))?;
-
-        let content = model
-            .get("content")
-            .ok_or_else(|| Error::ScriptExecutionFailed("No content quad found".to_string()))?;
-
-        let quad = content
-            .as_array()
-            .ok_or_else(|| Error::ScriptExecutionFailed("Invalid quad format".to_string()))?;
+        // Get and extract center position
+        let result = self.cdp_client.call_method("DOM.getBoxModel", serde_json::json!({ "objectId": element_id })).await?;
+        let quad = result.get("model")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .ok_or_else(|| Error::ScriptExecutionFailed("Invalid box model".to_string()))?;
 
         let x = (quad[0].as_f64().unwrap_or(0.0) + quad[4].as_f64().unwrap_or(0.0)) / 2.0;
         let y = (quad[1].as_f64().unwrap_or(0.0) + quad[5].as_f64().unwrap_or(0.0)) / 2.0;
 
-        // Delay before click
+        // Move, press, hold, release
         tokio::time::sleep(Duration::from_millis(options.delay_before_ms)).await;
-
-        // Move mouse to element
-        let current_pos = (0.0, 0.0);
-        let mouse_options = MouseMoveOptions {
+        self.simulate_mouse_move(page_id, (0.0, 0.0), (x, y), MouseMoveOptions {
             duration_ms: options.movement_duration_ms,
             deviation: 20.0,
             points: 10,
-        };
+        }).await?;
 
-        self.simulate_mouse_move(page_id, current_pos, (x, y), mouse_options)
-            .await?;
-
-        // Press mouse
-        let press_params = serde_json::json!({
-            "x": x,
-            "y": y,
-            "type": "mousePressed",
-            "button": "left",
-            "clickCount": 1
-        });
-
-        self.cdp_client
-            .call_method("Input.dispatchMouseEvent", press_params)
-            .await?;
-
-        // Hold duration
-        tokio::time::sleep(Duration::from_millis(options.hold_duration_ms)).await;
-
-        // Release mouse
-        let release_params = serde_json::json!({
-            "x": x,
-            "y": y,
-            "type": "mouseReleased",
-            "button": "left",
-            "clickCount": 1
-        });
-
-        self.cdp_client
-            .call_method("Input.dispatchMouseEvent", release_params)
-            .await?;
+        for (event_type, delay) in [("mousePressed", options.hold_duration_ms), ("mouseReleased", 0)] {
+            self.cdp_client.call_method("Input.dispatchMouseEvent", serde_json::json!({
+                "x": x, "y": y, "type": event_type, "button": "left", "clickCount": 1
+            })).await?;
+            if delay > 0 { tokio::time::sleep(Duration::from_millis(delay)).await; }
+        }
 
         Ok(())
     }
@@ -279,65 +207,38 @@ impl BehaviorSimulator for BehaviorSimulatorImpl {
         target_y: f64,
         options: ScrollOptions,
     ) -> Result<(), Error> {
-        // Generate random delays before await
-        let random_factors: Vec<f32> = {
-            let mut rng = rand::thread_rng();
-            (0..options.steps)
-                .map(|_| rng.gen_range(0.8..1.2))
-                .collect()
-        };
-        // rng dropped here
+        // Generate random factors before await
+        let random_factors: Vec<f32> = (0..options.steps)
+            .map(|_| rand::random::<f32>() * 0.4 + 0.8)
+            .collect();
 
         // Get current scroll position
-        let params = serde_json::json!({});
-
-        let result = self
-            .cdp_client
-            .call_method("Page.getLayoutMetrics", params)
-            .await?;
-
-        let current_y = result
-            .get("cssLayoutViewport")
+        let result = self.cdp_client.call_method("Page.getLayoutMetrics", serde_json::json!({})).await?;
+        let current_y = result.get("cssLayoutViewport")
             .and_then(|v| v.get("pageY"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
 
         let distance = target_y - current_y;
         let step_distance = distance / options.steps as f64;
-
-        let duration = Duration::from_millis(options.duration_ms);
-        let base_delay = duration / options.steps;
+        let base_delay = Duration::from_millis(options.duration_ms) / options.steps;
 
         for i in 0..options.steps {
             let progress = i as f64 / options.steps as f64;
-
-            // Add acceleration if enabled
             let multiplier = if options.acceleration {
-                // Ease-in-out
-                if progress < 0.5 {
-                    2.0 * progress * progress
-                } else {
-                    1.0 - 2.0 * (1.0 - progress) * (1.0 - progress)
-                }
+                // Ease-in-out curve
+                if progress < 0.5 { 2.0 * progress * progress }
+                else { 1.0 - 2.0 * (1.0 - progress).powi(2) }
             } else {
                 1.0
             };
 
             let scroll_y = current_y + step_distance * (i as f64 + 1.0) * multiplier;
+            self.cdp_client.call_method("Input.dispatchMouseEvent", serde_json::json!({
+                "x": 0.0, "y": scroll_y, "type": "mouseWheel"
+            })).await?;
 
-            let scroll_params = serde_json::json!({
-                "x": 0.0,
-                "y": scroll_y,
-                "type": "mouseWheel"
-            });
-
-            self.cdp_client
-                .call_method("Input.dispatchMouseEvent", scroll_params)
-                .await?;
-
-            // Add randomness to delay using pre-generated factor
-            let random_delay = base_delay.mul_f32(random_factors[i as usize]);
-            tokio::time::sleep(random_delay).await;
+            tokio::time::sleep(base_delay.mul_f32(random_factors[i as usize])).await;
         }
 
         Ok(())
@@ -355,24 +256,11 @@ impl BehaviorSimulator for BehaviorSimulatorImpl {
 impl BehaviorSimulatorImpl {
     /// Type a single character
     async fn type_char(&self, _page_id: &str, ch: char) -> Result<(), Error> {
-        let params = serde_json::json!({
-            "type": "keyDown",
-            "key": ch.to_string()
-        });
-
-        self.cdp_client
-            .call_method("Input.dispatchKeyEvent", params)
-            .await?;
-
-        let params = serde_json::json!({
-            "type": "keyUp",
-            "key": ch.to_string()
-        });
-
-        self.cdp_client
-            .call_method("Input.dispatchKeyEvent", params)
-            .await?;
-
+        for event_type in ["keyDown", "keyUp"] {
+            self.cdp_client.call_method("Input.dispatchKeyEvent", serde_json::json!({
+                "type": event_type, "key": ch.to_string()
+            })).await?;
+        }
         Ok(())
     }
 }

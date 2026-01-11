@@ -128,18 +128,39 @@ impl Error {
 }
 
 /// Convert Error to gRPC Status
+///
+/// This implementation provides consistent error mapping from domain errors
+/// to gRPC status codes with appropriate categorization:
+///
+/// **NotFound**: Session, browser, page, or element not found
+/// **InvalidArgument**: Configuration errors, invalid parameters
+/// **DeadlineExceeded**: Operation timeouts
+/// **Aborted**: Navigation or script execution failures
+/// **Internal**: All other errors including I/O, network, CDP, WebSocket errors
 impl From<Error> for tonic::Status {
     fn from(err: Error) -> Self {
-        match err {
-            Error::SessionNotFound(_) | Error::BrowserNotFound(_) | Error::PageNotFound(_) => {
-                tonic::Status::not_found(err.to_string())
-            }
+        match &err {
+            // Resource not found errors
+            Error::SessionNotFound(_)
+            | Error::BrowserNotFound(_)
+            | Error::PageNotFound(_)
+            | Error::ElementNotFound(_) => tonic::Status::not_found(err.to_string()),
+
+            // Invalid argument errors
+            Error::Configuration(_) => tonic::Status::invalid_argument(err.to_string()),
+
+            // Timeout errors
             Error::Timeout(_) => tonic::Status::deadline_exceeded(err.to_string()),
+
+            // Operation aborted errors
             Error::NavigationFailed(_) | Error::ScriptExecutionFailed(_) => {
                 tonic::Status::aborted(err.to_string())
             }
-            Error::Configuration(_) => tonic::Status::invalid_argument(err.to_string()),
-            Error::Grpc(status) => *status,
+
+            // Forward gRPC status directly
+            Error::Grpc(status) => status.as_ref().clone(),
+
+            // Default to internal error for uncategorized errors
             _ => tonic::Status::internal(err.to_string()),
         }
     }

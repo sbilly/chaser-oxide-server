@@ -4,6 +4,29 @@ use crate::{Error, Result};
 use serde::Deserialize;
 use std::env;
 
+/// Macro for parsing environment variables with type safety and consistent error handling
+macro_rules! parse_env_var {
+    ($config:ident, $field:ident, $env_var:expr, $ty:ty) => {
+        if let Ok(value) = env::var($env_var) {
+            $config.$field = value
+                .parse::<$ty>()
+                .map_err(|_| Error::configuration(concat!("Invalid ", $env_var)))?;
+        }
+    };
+
+    ($config:ident, $field:ident, $env_var:expr) => {
+        if let Ok(value) = env::var($env_var) {
+            $config.$field = value;
+        }
+    };
+
+    (opt $config:ident, $field:ident, $env_var:expr) => {
+        if let Ok(value) = env::var($env_var) {
+            $config.$field = Some(value);
+        }
+    };
+}
+
 /// Server configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -60,57 +83,17 @@ impl Config {
     pub fn from_env() -> Result<Self> {
         let mut config = Config::default();
 
-        if let Ok(host) = env::var("CHASER_HOST") {
-            config.host = host;
-        }
-
-        if let Ok(port) = env::var("CHASER_PORT") {
-            config.port = port
-                .parse()
-                .map_err(|_| Error::configuration("Invalid CHASER_PORT"))?;
-        }
-
-        if let Ok(chrome_path) = env::var("CHASER_CHROME_PATH") {
-            config.chrome_path = Some(chrome_path);
-        }
-
-        if let Ok(data_dir) = env::var("CHASER_DATA_DIR") {
-            config.chrome_data_dir = Some(data_dir);
-        }
-
-        if let Ok(max_browsers) = env::var("CHASER_MAX_BROWSERS") {
-            config.max_browsers = max_browsers
-                .parse()
-                .map_err(|_| Error::configuration("Invalid CHASER_MAX_BROWSERS"))?;
-        }
-
-        if let Ok(max_pages) = env::var("CHASER_MAX_PAGES") {
-            config.max_pages_per_browser = max_pages
-                .parse()
-                .map_err(|_| Error::configuration("Invalid CHASER_MAX_PAGES"))?;
-        }
-
-        if let Ok(timeout) = env::var("CHASER_SESSION_TIMEOUT") {
-            config.session_timeout = timeout
-                .parse()
-                .map_err(|_| Error::configuration("Invalid CHASER_SESSION_TIMEOUT"))?;
-        }
-
-        if let Ok(default_timeout) = env::var("CHASER_DEFAULT_TIMEOUT") {
-            config.default_timeout = default_timeout
-                .parse()
-                .map_err(|_| Error::configuration("Invalid CHASER_DEFAULT_TIMEOUT"))?;
-        }
-
-        if let Ok(stealth) = env::var("CHASER_STEALTH") {
-            config.stealth_enabled = stealth
-                .parse()
-                .map_err(|_| Error::configuration("Invalid CHASER_STEALTH"))?;
-        }
-
-        if let Ok(log_level) = env::var("CHASER_LOG_LEVEL") {
-            config.log_level = log_level;
-        }
+        // Use macro for DRY environment variable parsing
+        parse_env_var!(config, host, "CHASER_HOST");
+        parse_env_var!(config, port, "CHASER_PORT", u16);
+        parse_env_var!(opt config, chrome_path, "CHASER_CHROME_PATH");
+        parse_env_var!(opt config, chrome_data_dir, "CHASER_DATA_DIR");
+        parse_env_var!(config, max_browsers, "CHASER_MAX_BROWSERS", usize);
+        parse_env_var!(config, max_pages_per_browser, "CHASER_MAX_PAGES", usize);
+        parse_env_var!(config, session_timeout, "CHASER_SESSION_TIMEOUT", u64);
+        parse_env_var!(config, default_timeout, "CHASER_DEFAULT_TIMEOUT", u64);
+        parse_env_var!(config, stealth_enabled, "CHASER_STEALTH", bool);
+        parse_env_var!(config, log_level, "CHASER_LOG_LEVEL");
 
         Ok(config)
     }
