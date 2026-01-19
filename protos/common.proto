@@ -91,6 +91,11 @@ message BrowserOptions {
 
     // Timezone
     string timezone = 16;
+
+    // Incognito mode configuration
+    bool incognito = 17;              // Enable incognito mode at launch
+    bool cleanup_on_exit = 18;        // Cleanup user data on exit
+    string browser_context_id = 19;   // Associated browser context ID
 }
 
 // Browser process information
@@ -257,4 +262,14 @@ message Duration {
 message Timestamp {
     int64 seconds = 1;
     int32 nanos = 2;
+}
+
+// ============= Browser Context =============
+
+// Browser context information
+message BrowserContextInfo {
+    string context_id = 1;
+    string browser_id = 2;
+    bool is_incognito = 3;
+    int64 created_at = 4;
 }

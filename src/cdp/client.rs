@@ -1,6 +1,6 @@
 //! CDP client implementation
 //!
-//! This module provides a high-level CDP client with typed methods for common operations.
+//! Provides a high-level CDP client with typed methods for common operations.
 
 use super::traits::*;
 use super::types::*;
@@ -9,6 +9,9 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use std::sync::Arc;
 use tracing::{debug, info};
+
+/// Page load polling interval (milliseconds)
+const PAGE_LOAD_POLL_INTERVAL_MS: u64 = 100;
 
 /// CDP client implementation
 #[derive(Debug, Clone)]
@@ -27,50 +30,60 @@ impl CdpClientImpl {
         Self { connection }
     }
 
+    /// Serialize CDP parameters to JSON Value
+    fn serialize_params<T: serde::Serialize>(params: &T) -> Result<serde_json::Value, Error> {
+        serde_json::to_value(params)
+            .map_err(|e| Error::cdp(format!("Serialization error: {}", e)))
+    }
+
     /// Parse remote object value to evaluation result
-    fn parse_remote_object(obj: &crate::cdp::types::RemoteObject) -> Result<EvaluationResult, Error> {
-        let result = match obj.r#type.as_str() {
-            "string" => {
-                let value = obj.value
+    fn parse_remote_object(obj: &RemoteObject) -> Result<EvaluationResult, Error> {
+        match obj.r#type.as_str() {
+            "string" => Ok(EvaluationResult::String(
+                obj.value
                     .as_ref()
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
-                    .to_string();
-                debug!("parse_remote_object: string type, value='{}'", value);
-                Ok(EvaluationResult::String(value))
-            },
-            "number" => {
-                let value = obj.value
-                    .as_ref()
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                debug!("parse_remote_object: number type, value={}", value);
-                Ok(EvaluationResult::Number(value))
-            },
-            "boolean" => {
-                let value = obj.value
-                    .as_ref()
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                debug!("parse_remote_object: boolean type, value={}", value);
-                Ok(EvaluationResult::Bool(value))
-            },
-            "undefined" | "null" => {
-                debug!("parse_remote_object: null/undefined type");
-                Ok(EvaluationResult::Null)
-            },
+                    .to_string(),
+            )),
+            "number" => Ok(EvaluationResult::Number(
+                obj.value.as_ref().and_then(|v| v.as_f64()).unwrap_or(0.0),
+            )),
+            "boolean" => Ok(EvaluationResult::Bool(
+                obj.value.as_ref().and_then(|v| v.as_bool()).unwrap_or(false),
+            )),
+            "undefined" | "null" => Ok(EvaluationResult::Null),
             "object" | "function" | "bigint" | "symbol" => {
-                let value = obj.value.clone().unwrap_or(serde_json::Value::Null);
-                debug!("parse_remote_object: object type, value={:?}", value);
-                Ok(EvaluationResult::Object(value))
-            },
-            _ => {
-                debug!("parse_remote_object: unknown type '{}', returning Null", obj.r#type);
-                Ok(EvaluationResult::Null)
-            },
-        };
-        debug!("parse_remote_object: returning {:?}", result);
-        result
+                Ok(EvaluationResult::Object(obj.value.clone().unwrap_or(serde_json::Value::Null)))
+            }
+            _ => Ok(EvaluationResult::Null),
+        }
+    }
+
+    /// Wait for page load to complete by polling document.readyState
+    async fn wait_for_page_load(&self, timeout_ms: u64) -> Result<(), Error> {
+        let max_attempts = timeout_ms / PAGE_LOAD_POLL_INTERVAL_MS;
+
+        for attempt in 0..max_attempts {
+            tokio::time::sleep(tokio::time::Duration::from_millis(PAGE_LOAD_POLL_INTERVAL_MS)).await;
+
+            match self.evaluate("document.readyState", false).await {
+                Ok(EvaluationResult::String(state)) if state == "complete" => {
+                    info!("Page loaded successfully on attempt {}", attempt + 1);
+                    return Ok(());
+                }
+                Ok(EvaluationResult::String(state)) => {
+                    debug!("Document ready state on attempt {}: {}", attempt + 1, state);
+                }
+                Err(e) => {
+                    debug!("Error checking ready state on attempt {}: {}", attempt + 1, e);
+                }
+                _ => {}
+            }
+        }
+
+        info!("Page load polling timeout - continuing anyway");
+        Ok(())
     }
 }
 
@@ -82,7 +95,7 @@ impl CdpClient for CdpClientImpl {
     }
 
     /// Navigate to a URL
-    async fn navigate(&self, url: &str) -> Result<NavigationResult, Error> {
+    async fn navigate(&self, url: &str, timeout_ms: u64) -> Result<NavigationResult, Error> {
         info!("Navigating to {}", url);
 
         let params = NavigateParams {
@@ -92,42 +105,11 @@ impl CdpClient for CdpClientImpl {
         };
 
         let result = self
-            .call_method(
-                "Page.navigate",
-                serde_json::to_value(params).map_err(|e| Error::cdp(format!("Serialization error: {}", e)))?,
-            )
+            .call_method("Page.navigate", Self::serialize_params(&params)?)
             .await?;
 
-        // Wait for page load by polling document.readyState
-        // This is more reliable than event-based approach due to race conditions
-        let max_attempts = 50; // 5 seconds (50 * 100ms)
-        let mut page_loaded = false;
-
-        for attempt in 0..max_attempts {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-            match self.evaluate("document.readyState", false).await {
-                Ok(EvaluationResult::String(state)) if state == "complete" => {
-                    info!("Page loaded successfully on attempt {}", attempt + 1);
-                    page_loaded = true;
-                    break;
-                }
-                Ok(EvaluationResult::String(state)) => {
-                    debug!("Document ready state on attempt {}: {}", attempt + 1, state);
-                }
-                Ok(_) => {
-                    debug!("Unexpected document.readyState type on attempt {}", attempt + 1);
-                }
-                Err(e) => {
-                    // Page might not be ready yet, continue polling
-                    debug!("Error checking ready state on attempt {}: {}", attempt + 1, e);
-                }
-            }
-        }
-
-        if !page_loaded {
-            info!("Page load polling timeout - continuing anyway");
-        }
+        // Wait for page load to complete
+        let _ = self.wait_for_page_load(timeout_ms).await;
 
         Ok(NavigationResult {
             navigation_id: result
@@ -140,7 +122,7 @@ impl CdpClient for CdpClientImpl {
                 .and_then(|u| u.as_str())
                 .unwrap_or(url)
                 .to_string(),
-            status_code: 200, // Default to OK
+            status_code: 200,
         })
     }
 
@@ -156,32 +138,25 @@ impl CdpClient for CdpClientImpl {
         };
 
         let result = self
-            .call_method(
-                "Runtime.evaluate",
-                serde_json::to_value(params).map_err(|e| Error::cdp(format!("Serialization error: {}", e)))?,
-            )
+            .call_method("Runtime.evaluate", Self::serialize_params(&params)?)
             .await?;
 
         // Check for exception
         if let Some(exception) = result.get("exceptionDetails") {
             return Err(Error::script_execution_failed(
-                exception.get("exception")
+                exception
+                    .get("exception")
                     .and_then(|e| e.get("description"))
                     .and_then(|d| d.as_str())
-                    .unwrap_or("Unknown error")
-                    .to_string()
+                    .unwrap_or("Unknown error"),
             ));
         }
 
         // Parse result - CDP response structure: {"result": {"result": {...}}}
-        let eval_response: crate::cdp::types::EvaluateResponse = serde_json::from_value(result)
+        let eval_response: EvaluateResponse = serde_json::from_value(result)
             .map_err(|e| Error::cdp(format!("Failed to parse EvaluateResponse: {}", e)))?;
-        let remote_obj = eval_response.result;
-        debug!("evaluate: parsed RemoteObject: type='{}', value={:?}", remote_obj.r#type, remote_obj.value);
 
-        let eval_result = Self::parse_remote_object(&remote_obj)?;
-        debug!("evaluate: parse_remote_object returned {:?}", eval_result);
-        Ok(eval_result)
+        Self::parse_remote_object(&eval_response.result)
     }
 
     /// Capture a screenshot
@@ -189,27 +164,22 @@ impl CdpClient for CdpClientImpl {
         info!("Capturing screenshot");
 
         let (format_str, quality) = match format {
-            ScreenshotFormat::Png => ("png".to_string(), None),
-            ScreenshotFormat::Jpeg(q) => ("jpeg".to_string(), Some(q)),
-            ScreenshotFormat::WebP(q) => ("webp".to_string(), Some(q)),
+            ScreenshotFormat::Png => ("png", None),
+            ScreenshotFormat::Jpeg(q) => ("jpeg", Some(q)),
+            ScreenshotFormat::WebP(q) => ("webp", Some(q)),
         };
 
-        let mut params = serde_json::json!({
-            "format": format_str,
-        });
-
+        let mut params = serde_json::json!({ "format": format_str });
         if let Some(q) = quality {
             params["quality"] = serde_json::json!(q);
         }
 
         let result = self.call_method("Page.captureScreenshot", params).await?;
-
         let data = result
             .get("data")
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::cdp("No data in screenshot result"))?;
 
-        // Decode base64
         BASE64
             .decode(data)
             .map_err(|e| Error::cdp(format!("Failed to decode screenshot: {}", e)))
@@ -219,9 +189,7 @@ impl CdpClient for CdpClientImpl {
     async fn get_content(&self) -> Result<String, Error> {
         debug!("Getting page content");
 
-        let script = "document.documentElement.outerHTML";
-
-        match self.evaluate(script, false).await? {
+        match self.evaluate("document.documentElement.outerHTML", false).await? {
             EvaluationResult::String(html) => Ok(html),
             _ => Ok(String::new()),
         }
@@ -232,9 +200,7 @@ impl CdpClient for CdpClientImpl {
         debug!("Setting page content");
 
         let script = format!("document.documentElement.outerHTML = {}", serde_json::json!(html));
-
         self.evaluate(&script, false).await?;
-
         Ok(())
     }
 
@@ -242,12 +208,9 @@ impl CdpClient for CdpClientImpl {
     async fn reload(&self, ignore_cache: bool) -> Result<(), Error> {
         info!("Reloading page (ignore_cache: {})", ignore_cache);
 
-        let params = serde_json::json!({
-            "ignoreCache": ignore_cache,
-        });
-
-        // Ignore result for reload command
-        let _ = self.call_method("Page.reload", params).await?;
+        let _ = self
+            .call_method("Page.reload", serde_json::json!({ "ignoreCache": ignore_cache }))
+            .await?;
 
         Ok(())
     }
@@ -256,10 +219,9 @@ impl CdpClient for CdpClientImpl {
     async fn enable_domain(&self, domain: &str) -> Result<(), Error> {
         info!("Enabling domain: {}", domain);
 
-        let method = format!("{}.enable", domain);
-
-        // Ignore result for enable command
-        let _ = self.call_method(&method, serde_json::json!({})).await?;
+        let _ = self
+            .call_method(&format!("{}.enable", domain), serde_json::json!({}))
+            .await?;
 
         Ok(())
     }
@@ -268,9 +230,11 @@ impl CdpClient for CdpClientImpl {
     async fn call_method(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, Error> {
         debug!("Calling CDP method: {}", method);
 
-        let response = self.connection().send_command(method, params).await?;
-
-        response.result.ok_or_else(|| Error::cdp("No result in response"))
+        self.connection()
+            .send_command(method, params)
+            .await?
+            .result
+            .ok_or_else(|| Error::cdp("No result in response"))
     }
 
     /// Subscribe to events
@@ -278,17 +242,14 @@ impl CdpClient for CdpClientImpl {
         info!("Subscribing to events: {}", event_type);
 
         let event_receiver = self.connection.listen_events().await?;
-
-        // Filter events by type
         let (tx, rx) = tokio::sync::mpsc::channel(100);
-        let filter_event_type = event_type.to_string();
+        let event_filter = event_type.to_string();
 
         tokio::spawn(async move {
-            let mut event_receiver = event_receiver;
-            while let Some(event) = event_receiver.recv().await {
-                if (event.method == filter_event_type || filter_event_type == "*")
-                    && tx.send(event).await.is_err()
-                {
+            let mut receiver = event_receiver;
+            while let Some(event) = receiver.recv().await {
+                let matches = event_filter == "*" || event.method == event_filter;
+                if matches && tx.send(event).await.is_err() {
                     break;
                 }
             }

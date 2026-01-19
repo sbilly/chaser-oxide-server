@@ -68,6 +68,18 @@ pub enum Error {
     /// Internal error
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// Port exhaustion error
+    #[error("No available ports in range")]
+    PortExhausted,
+
+    /// Process launch failed
+    #[error("Process launch failed: {0}")]
+    ProcessLaunch(String),
+
+    /// Process terminated unexpectedly
+    #[error("Process terminated: {0}")]
+    ProcessTerminated(String),
 }
 
 impl Error {
@@ -125,6 +137,21 @@ impl Error {
     pub fn internal<S: Into<String>>(msg: S) -> Self {
         Error::Internal(msg.into())
     }
+
+    /// Create a new process launch error
+    pub fn process_launch<S: Into<String>>(msg: S) -> Self {
+        Error::ProcessLaunch(msg.into())
+    }
+
+    /// Create a new port exhausted error
+    pub fn port_exhausted() -> Self {
+        Error::PortExhausted
+    }
+
+    /// Create a new process terminated error
+    pub fn process_terminated<S: Into<String>>(msg: S) -> Self {
+        Error::ProcessTerminated(msg.into())
+    }
 }
 
 /// Convert Error to gRPC Status
@@ -159,6 +186,11 @@ impl From<Error> for tonic::Status {
 
             // Forward gRPC status directly
             Error::Grpc(status) => status.as_ref().clone(),
+
+            // Process management errors map to internal
+            Error::PortExhausted | Error::ProcessLaunch(_) | Error::ProcessTerminated(_) => {
+                tonic::Status::internal(err.to_string())
+            }
 
             // Default to internal error for uncategorized errors
             _ => tonic::Status::internal(err.to_string()),

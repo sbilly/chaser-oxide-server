@@ -1,61 +1,53 @@
-//! # Chaser-Oxide 服务入口
-//!
-//! Chaser-Oxide gRPC 服务器的入口点，提供基于 Chrome DevTools Protocol 的浏览器自动化服务。
-//!
-//! ## 主要功能
-//! - 初始化并配置 gRPC 服务器
-//! - 管理 CDP（Chrome DevTools Protocol）连接
-//! - 提供浏览器、页面、元素、事件和配置文件的 gRPC 服务
-//! - 实现优雅关闭和会话清理
-//!
-//! ## 架构
-//! 服务由以下核心组件构成：
-//! - **CDP 层**: 与 Chrome/Chromium 浏览器的 WebSocket 通信
-//! - **会话管理**: 管理浏览器、页面和元素的生命周期
-//! - **隐身引擎**: 提供浏览器指纹规避和人类行为模拟
-//! - **服务层**: 实现 gRPC 服务接口
-//!
-//! ## 环境变量
-//! - `CHASER_HOST`: 服务器监听地址（默认: 0.0.0.0）
-//! - `CHASER_PORT`: 服务器监听端口（默认: 50051）
-//! - `CHASER_CDP_ENDPOINT`: CDP WebSocket 端点（默认: ws://localhost:9222）
+//! Chaser-Oxide gRPC server entry point
 
+// Core imports
+use std::sync::Arc;
+use tonic::transport::Server;
+use tracing::{debug, error, info, warn, Level};
+use tracing_subscriber::FmtSubscriber;
+
+// Chaser-Oxide imports
 use chaser_oxide::{
     config::Config,
     cdp::browser::CdpBrowserImpl,
     cdp::mock::MockCdpClient,
-    session::{SessionManagerImpl, SessionManager},
+    cdp::traits::CdpBrowser,
+    process::{ProcessManager, ProcessManagerConfig, run_health_check},
+    session::{SessionManager, SessionManagerImpl},
     services::{
-        BrowserServiceGrpc, PageServiceGrpc, ElementGrpcService,
-        EventGrpcService, EventDispatcher, ProfileServiceImpl,
+        BrowserServiceGrpc, ElementGrpcService, EventDispatcher, EventGrpcService,
+        PageServiceGrpc, ProfileServiceImpl,
         profile::{ProfileManagerImpl, ProfileServiceGrpc},
     },
     stealth::{
-        StealthEngineImpl, ScriptInjectorImpl, BehaviorSimulatorImpl,
-        FingerprintGeneratorImpl,
+        BehaviorSimulatorImpl, FingerprintGeneratorImpl, ScriptInjectorImpl,
+        StealthEngineImpl,
     },
+    stealth::traits::{BehaviorSimulator, FingerprintGenerator, ProfileManager, ScriptInjector, StealthEngine},
 };
 
-// Import generated Server types for wrapping services
+// gRPC generated types
 use chaser_oxide::chaser_oxide::v1::{
     browser_service_server::BrowserServiceServer as BrowserServer,
-    page_service_server::PageServiceServer as PageServer,
     element_service_server::ElementServiceServer as ElementServer,
     event_service_server::EventServiceServer,
+    page_service_server::PageServiceServer as PageServer,
     profile_service_server::ProfileServiceServer as ProfileServer,
 };
-use std::sync::Arc;
-use tonic::transport::Server;
-use tracing::{error, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
+
+#[cfg(unix)]
+use nix::sys::wait::{waitpid, WaitPidFlag};
+#[cfg(unix)]
+use nix::unistd::Pid;
 
 /// Container for all service dependencies
 struct ServiceDependencies {
     session_manager_impl: Arc<SessionManagerImpl>,
     session_manager: Arc<dyn SessionManager>,
     event_dispatcher: Arc<EventDispatcher>,
-    profile_manager: Arc<dyn chaser_oxide::stealth::traits::ProfileManager>,
-    stealth_engine: Arc<dyn chaser_oxide::stealth::traits::StealthEngine>,
+    profile_manager: Arc<dyn ProfileManager>,
+    stealth_engine: Arc<dyn StealthEngine>,
+    process_manager: Arc<ProcessManager>,
 }
 
 /// Initialize tracing subscriber with configurable log level
@@ -73,40 +65,73 @@ fn init_tracing() {
         .expect("setting default subscriber failed");
 }
 
+/// Build ProcessManagerConfig from environment variables
+fn build_process_manager_config() -> ProcessManagerConfig {
+    ProcessManagerConfig {
+        chrome_path: std::env::var("CHASER_BROWSER_PATH")
+            .unwrap_or_else(|_| "chromium".to_string()),
+        data_dir: std::env::var("CHASER_DATA_DIR")
+            .unwrap_or_else(|_| "/app/data".to_string()),
+        port_range: (
+            std::env::var("CHASER_CDP_PORT_START")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(9000),
+            std::env::var("CHASER_CDP_PORT_END")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(9900),
+        ),
+        health_check_interval: std::time::Duration::from_secs(
+            std::env::var("CHASER_HEALTH_CHECK_INTERVAL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
+        ),
+    }
+}
+
 /// Initialize all service dependencies
 fn init_services(_config: &Config) -> ServiceDependencies {
-    // Create CDP browser factory
-    let cdp_endpoint = std::env::var("CHASER_CDP_ENDPOINT")
-        .unwrap_or_else(|_| "ws://localhost:9222".to_string());
+    // Initialize process manager
+    let pm_config = build_process_manager_config();
+    let process_manager = Arc::new(ProcessManager::with_config(pm_config.clone()));
+    info!("Process manager initialized");
 
-    let cdp_factory = move || {
-        let endpoint = cdp_endpoint.clone();
-        Ok(Arc::new(CdpBrowserImpl::new(endpoint)) as Arc<dyn chaser_oxide::cdp::traits::CdpBrowser>)
-    };
+    // Determine CDP mode
+    let cdp_endpoint = std::env::var("CHASER_CDP_ENDPOINT").ok();
+    let use_external_cdp = cdp_endpoint.is_some();
+
+    if use_external_cdp {
+        info!("Using external CDP endpoint: {}", cdp_endpoint.as_ref().unwrap());
+    } else {
+        info!("Using self-managed browser mode");
+    }
 
     // Create session manager
-    let session_manager_impl = Arc::new(SessionManagerImpl::new(cdp_factory));
+    let session_manager_impl: Arc<SessionManagerImpl> = if let Some(endpoint) = cdp_endpoint {
+        let factory = move || {
+            Ok(Arc::new(CdpBrowserImpl::new(endpoint.clone())) as Arc<dyn CdpBrowser>)
+        };
+        Arc::new(SessionManagerImpl::new(factory))
+    } else {
+        let factory = || {
+            Ok(Arc::new(CdpBrowserImpl::new("ws://localhost:9222".to_string())) as Arc<dyn CdpBrowser>)
+        };
+        Arc::new(SessionManagerImpl::with_process_manager(factory, process_manager.clone()))
+    };
     let session_manager: Arc<dyn SessionManager> = session_manager_impl.clone();
     info!("Session manager initialized");
 
     // Create event dispatcher
     let event_dispatcher = Arc::new(EventDispatcher::new(1000));
 
-    // Create ProfileService dependencies
-    let script_injector = Arc::new(ScriptInjectorImpl::new(session_manager.clone()))
-        as Arc<dyn chaser_oxide::stealth::traits::ScriptInjector>;
-
-    let fingerprint_generator = Arc::new(FingerprintGeneratorImpl::new())
-        as Arc<dyn chaser_oxide::stealth::traits::FingerprintGenerator>;
-
-    let profile_manager = Arc::new(ProfileManagerImpl::new(fingerprint_generator))
-        as Arc<dyn chaser_oxide::stealth::traits::ProfileManager>;
-
-    let behavior_simulator = Arc::new(BehaviorSimulatorImpl::new(Arc::new(MockCdpClient::new())))
-        as Arc<dyn chaser_oxide::stealth::traits::BehaviorSimulator>;
-
-    let stealth_engine = Arc::new(StealthEngineImpl::new(script_injector, behavior_simulator))
-        as Arc<dyn chaser_oxide::stealth::traits::StealthEngine>;
+    // Create stealth components
+    let script_injector: Arc<dyn ScriptInjector> = Arc::new(ScriptInjectorImpl::new(session_manager.clone()));
+    let fingerprint_generator: Arc<dyn FingerprintGenerator> = Arc::new(FingerprintGeneratorImpl::new());
+    let profile_manager: Arc<dyn ProfileManager> = Arc::new(ProfileManagerImpl::new(fingerprint_generator));
+    let behavior_simulator: Arc<dyn BehaviorSimulator> = Arc::new(BehaviorSimulatorImpl::new(Arc::new(MockCdpClient::new())));
+    let stealth_engine: Arc<dyn StealthEngine> = Arc::new(StealthEngineImpl::new(script_injector, behavior_simulator));
 
     ServiceDependencies {
         session_manager_impl,
@@ -114,6 +139,7 @@ fn init_services(_config: &Config) -> ServiceDependencies {
         event_dispatcher,
         profile_manager,
         stealth_engine,
+        process_manager,
     }
 }
 
@@ -163,6 +189,61 @@ fn spawn_cleanup_task(session_manager: Arc<SessionManagerImpl>) {
             }
         }
     });
+}
+
+/// Spawn zombie reaper task to reap orphaned child processes
+/// This is necessary when running as PID 1 in a container
+#[cfg(unix)]
+fn spawn_zombie_reaper_task() {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+        let mut total_reaped = 0u64;
+
+        loop {
+            interval.tick().await;
+
+            // Reap all available zombies using WNOHANG (non-blocking)
+            let mut reaped_this_round = 0u32;
+            loop {
+                match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
+                    Ok(nix::sys::wait::WaitStatus::Exited(pid, exit_code)) => {
+                        debug!("Reaped zombie: PID {} exited with code {}", pid, exit_code);
+                        reaped_this_round += 1;
+                    }
+                    Ok(nix::sys::wait::WaitStatus::Signaled(pid, signal, ..)) => {
+                        debug!("Reaped zombie: PID {} killed by signal {:?}", pid, signal);
+                        reaped_this_round += 1;
+                    }
+                    Ok(nix::sys::wait::WaitStatus::StillAlive) => {
+                        // No more zombies to reap
+                        break;
+                    }
+                    Ok(_) => {
+                        // Other states don't need reaping
+                        break;
+                    }
+                    Err(nix::errno::Errno::ECHILD) => {
+                        // No child processes
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("Error waiting for child processes: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            if reaped_this_round > 0 {
+                total_reaped += reaped_this_round as u64;
+                info!("Reaped {} zombie process(es) (total: {})", reaped_this_round, total_reaped);
+            }
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_zombie_reaper_task() {
+    // No-op on non-Unix systems
 }
 
 /// Setup graceful shutdown signal handler
@@ -218,6 +299,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start cleanup task
     spawn_cleanup_task(deps.session_manager_impl.clone());
 
+    // Start health check task for browser processes
+    tokio::spawn(run_health_check(deps.process_manager.clone()));
+    info!("Health check task started");
+
+    // Start zombie reaper task to reap orphaned child processes
+    spawn_zombie_reaper_task();
+    info!("Zombie reaper task started");
+
     // Setup graceful shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     tokio::spawn(async move {
@@ -244,6 +333,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Cleaning up all sessions...");
     if let Err(e) = deps.session_manager.cleanup().await {
         error!("Failed to cleanup sessions: {}", e);
+    }
+
+    // Cleanup all browser processes
+    info!("Cleaning up all browser processes...");
+    if let Err(e) = deps.process_manager.cleanup_all().await {
+        error!("Failed to cleanup browser processes: {}", e);
     }
 
     info!("Server shutdown complete");

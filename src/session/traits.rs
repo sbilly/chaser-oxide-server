@@ -24,6 +24,12 @@ pub struct BrowserOptions {
     pub executable_path: Option<String>,
     /// CDP endpoint (e.g., "ws://localhost:9222" or from CHASER_CDP_ENDPOINT env var)
     pub cdp_endpoint: Option<String>,
+    /// 隐身模式 (启动时使用 --incognito 参数)
+    pub incognito: bool,
+    /// 退出时清理用户数据
+    pub cleanup_on_exit: bool,
+    /// 浏览器上下文 ID
+    pub browser_context_id: Option<String>,
 }
 
 impl Default for BrowserOptions {
@@ -37,6 +43,9 @@ impl Default for BrowserOptions {
             args: vec![],
             executable_path: None,
             cdp_endpoint: None,
+            incognito: false,
+            cleanup_on_exit: false,
+            browser_context_id: None,
         }
     }
 }
@@ -138,6 +147,15 @@ pub enum LoadState {
     NetworkAlmostIdle,
 }
 
+/// Browser context information
+#[derive(Debug, Clone)]
+pub struct BrowserContextInfo {
+    pub context_id: String,
+    pub browser_id: String,
+    pub is_incognito: bool,
+    pub created_at: i64,
+}
+
 /// Browser context trait
 ///
 /// Represents a running browser instance.
@@ -157,6 +175,15 @@ pub trait BrowserContext: Send + Sync + std::fmt::Debug {
 
     /// Check if browser is active
     fn is_active(&self) -> bool;
+
+    /// Create a new incognito browser context
+    async fn create_incognito_context(&self) -> Result<BrowserContextInfo, crate::Error>;
+
+    /// Close a specific incognito context
+    async fn close_incognito_context(&self, context_id: &str) -> Result<(), crate::Error>;
+
+    /// Get all browser contexts
+    async fn get_contexts(&self) -> Result<Vec<BrowserContextInfo>, crate::Error>;
 }
 
 /// Page context trait

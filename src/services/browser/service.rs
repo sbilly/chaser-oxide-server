@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
-use crate::session::{SessionManager, BrowserOptions};
+use crate::session::{SessionManager, BrowserOptions, BrowserContextInfo};
 use crate::services::traits::{BrowserInfo, BrowserVersion, BrowserStatus, PageInfo};
 use crate::Error;
 
@@ -19,15 +19,22 @@ use crate::chaser_oxide::v1::{
     get_version_response::Response as GetVersionResponseEnum,
     get_status_response::Response as GetStatusResponseEnum,
     connect_response::Response as ConnectResponseEnum,
+    create_context_response::Response as CreateContextResponseEnum,
+    close_context_response::Response as CloseContextResponseEnum,
+    list_contexts_response::Response as ListContextsResponseEnum,
     LaunchRequest, LaunchResponse,
     GetPagesRequest, GetPagesResponse, GetPagesResult,
     CloseRequest, CloseResponse,
     GetVersionRequest, GetVersionResponse,
     GetStatusRequest, GetStatusResponse,
     ConnectRequest, ConnectResponse,
+    CreateContextRequest, CreateContextResponse,
+    CloseContextRequest, CloseContextResponse,
+    ListContextsRequest, ListContextsResponse, ListContextsResult,
     BrowserOptions as ProtoBrowserOptions,
     PageInfo as ProtoPageInfo,
     BrowserInfo as ProtoBrowserInfo,
+    BrowserContextInfo as ProtoBrowserContextInfo,
     VersionInfo,
     BrowserStatus as ProtoBrowserStatus,
     Empty,
@@ -76,8 +83,10 @@ where
             proxy: if opts.proxy_server.is_empty() { None } else { Some(opts.proxy_server) },
             args: opts.args,
             executable_path: if opts.executable_path.is_empty() { None } else { Some(opts.executable_path) },
-            // Read CDP endpoint from environment variable if set
             cdp_endpoint: std::env::var("CHASER_CDP_ENDPOINT").ok(),
+            incognito: opts.incognito,
+            cleanup_on_exit: opts.cleanup_on_exit,
+            browser_context_id: if opts.browser_context_id.is_empty() { None } else { Some(opts.browser_context_id) },
         }
     }
 
@@ -125,6 +134,16 @@ where
             uptime_seconds: (status.uptime_ms / 1000) as i64,
             memory_usage_bytes: 0, // Will be filled by actual implementation
             active_pages: vec![],
+        }
+    }
+
+    /// Convert internal BrowserContextInfo to proto
+    fn context_info_to_proto(info: BrowserContextInfo) -> ProtoBrowserContextInfo {
+        ProtoBrowserContextInfo {
+            context_id: info.context_id,
+            browser_id: info.browser_id,
+            is_incognito: info.is_incognito,
+            created_at: info.created_at,
         }
     }
 }
@@ -285,6 +304,135 @@ where
                 Self::error_to_proto(error)
             )),
         }))
+    }
+
+    async fn create_incognito_context(
+        &self,
+        request: Request<CreateContextRequest>,
+    ) -> Result<Response<CreateContextResponse>, Status> {
+        let req = request.into_inner();
+
+        let browser = self.session_manager
+            .get_browser(&req.browser_id)
+            .await
+            .map_err(|e| Status::from(Error::internal(e.to_string())))?;
+
+        match browser.create_incognito_context().await {
+            Ok(context_info) => {
+                info!(
+                    browser_id = %req.browser_id,
+                    context_id = %context_info.context_id,
+                    "Incognito context created successfully"
+                );
+
+                Ok(Response::new(CreateContextResponse {
+                    response: Some(CreateContextResponseEnum::ContextInfo(
+                        Self::context_info_to_proto(context_info)
+                    )),
+                }))
+            }
+            Err(e) => {
+                error!(
+                    browser_id = %req.browser_id,
+                    error = %e,
+                    "Failed to create incognito context"
+                );
+
+                Ok(Response::new(CreateContextResponse {
+                    response: Some(CreateContextResponseEnum::Error(
+                        Self::error_to_proto(e)
+                    )),
+                }))
+            }
+        }
+    }
+
+    async fn close_incognito_context(
+        &self,
+        request: Request<CloseContextRequest>,
+    ) -> Result<Response<CloseContextResponse>, Status> {
+        let req = request.into_inner();
+
+        let browser = self.session_manager
+            .get_browser(&req.browser_id)
+            .await
+            .map_err(|e| Status::from(Error::internal(e.to_string())))?;
+
+        match browser.close_incognito_context(&req.context_id).await {
+            Ok(_) => {
+                info!(
+                    browser_id = %req.browser_id,
+                    context_id = %req.context_id,
+                    "Incognito context closed successfully"
+                );
+
+                Ok(Response::new(CloseContextResponse {
+                    response: Some(CloseContextResponseEnum::Success(Empty {})),
+                }))
+            }
+            Err(e) => {
+                error!(
+                    browser_id = %req.browser_id,
+                    context_id = %req.context_id,
+                    error = %e,
+                    "Failed to close incognito context"
+                );
+
+                Ok(Response::new(CloseContextResponse {
+                    response: Some(CloseContextResponseEnum::Error(
+                        Self::error_to_proto(e)
+                    )),
+                }))
+            }
+        }
+    }
+
+    async fn list_contexts(
+        &self,
+        request: Request<ListContextsRequest>,
+    ) -> Result<Response<ListContextsResponse>, Status> {
+        let req = request.into_inner();
+
+        let browser = self.session_manager
+            .get_browser(&req.browser_id)
+            .await
+            .map_err(|e| Status::from(Error::internal(e.to_string())))?;
+
+        match browser.get_contexts().await {
+            Ok(contexts) => {
+                let proto_contexts: Vec<ProtoBrowserContextInfo> = contexts
+                    .into_iter()
+                    .map(Self::context_info_to_proto)
+                    .collect();
+
+                info!(
+                    browser_id = %req.browser_id,
+                    count = proto_contexts.len(),
+                    "Listed contexts successfully"
+                );
+
+                Ok(Response::new(ListContextsResponse {
+                    response: Some(ListContextsResponseEnum::Result(
+                        ListContextsResult {
+                            contexts: proto_contexts
+                        }
+                    )),
+                }))
+            }
+            Err(e) => {
+                error!(
+                    browser_id = %req.browser_id,
+                    error = %e,
+                    "Failed to list contexts"
+                );
+
+                Ok(Response::new(ListContextsResponse {
+                    response: Some(ListContextsResponseEnum::Error(
+                        Self::error_to_proto(e)
+                    )),
+                }))
+            }
+        }
     }
 }
 

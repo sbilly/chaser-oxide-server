@@ -1,6 +1,6 @@
 //! Mock CDP implementation for testing
 //!
-//! This module provides mock implementations of CDP traits for development and testing.
+//! Provides mock implementations of CDP traits for development and testing.
 
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -10,11 +10,22 @@ use tokio::sync::Mutex;
 use crate::cdp::traits::*;
 use crate::Error;
 
+/// Minimal PNG header (1x1 transparent pixel)
+const PNG_HEADER: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xDE,
+];
+
+/// Minimal JPEG header
+const JPEG_HEADER: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
+
+/// Minimal WebP header
+const WEBP_HEADER: &[u8] = &[0x52, 0x49, 0x46, 0x46];
+
 /// Mock CDP connection
 #[derive(Debug)]
 pub struct MockCdpConnection {
-    #[allow(dead_code)]
-    id: String,
     is_active: Arc<AtomicBool>,
     next_id: AtomicU64,
 }
@@ -23,7 +34,6 @@ impl MockCdpConnection {
     /// Create a new mock CDP connection
     pub fn new() -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
             is_active: Arc::new(AtomicBool::new(true)),
             next_id: AtomicU64::new(1),
         }
@@ -45,17 +55,13 @@ impl CdpConnection for MockCdpConnection {
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
-        // Simulate different responses based on method
         let result = match method {
             "Page.navigate" => Some(serde_json::json!({
                 "frameId": uuid::Uuid::new_v4().to_string(),
                 "loaderId": uuid::Uuid::new_v4().to_string(),
             })),
             "Runtime.evaluate" => Some(serde_json::json!({
-                "result": {
-                    "type": "string",
-                    "value": "mock result"
-                }
+                "result": { "type": "string", "value": "mock result" }
             })),
             "Page.captureScreenshot" => Some(serde_json::json!({
                 "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -63,6 +69,10 @@ impl CdpConnection for MockCdpConnection {
             "DOM.getOuterHtml" => Some(serde_json::json!({
                 "outerHtml": "<html><body>Mock HTML</body></html>"
             })),
+            "Target.createBrowserContext" => Some(serde_json::json!({
+                "browserContextId": uuid::Uuid::new_v4().to_string(),
+            })),
+            "Target.disposeBrowserContext" => Some(serde_json::json!({})),
             _ => Some(serde_json::json!({})),
         };
 
@@ -78,17 +88,8 @@ impl CdpConnection for MockCdpConnection {
             return Err(Error::cdp("Connection is closed"));
         }
 
-        let (_tx, rx) = tokio::sync::mpsc::channel(100);
-
-        // Spawn a task to emit mock events
-        let is_active = self.is_active.clone();
-        tokio::spawn(async move {
-            while is_active.load(Ordering::Relaxed) {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-        });
-
-        Ok(rx)
+        // Return empty channel for mock
+        Ok(tokio::sync::mpsc::channel(100).1)
     }
 
     async fn close(&self) -> Result<(), Error> {
@@ -118,6 +119,18 @@ impl MockCdpClient {
             content: Arc::new(Mutex::new(String::new())),
         }
     }
+
+    /// Evaluate simple arithmetic expression
+    fn eval_arithmetic(script: &str) -> EvaluationResult {
+        let parts: Vec<&str> = script.split('+').collect();
+        if parts.len() == 2 {
+            let a = parts[0].trim().parse().unwrap_or(0.0);
+            let b = parts[1].trim().parse().unwrap_or(0.0);
+            EvaluationResult::Number(a + b)
+        } else {
+            EvaluationResult::String(script.to_string())
+        }
+    }
 }
 
 impl Default for MockCdpClient {
@@ -129,10 +142,10 @@ impl Default for MockCdpClient {
 #[async_trait]
 impl CdpClient for MockCdpClient {
     fn connection(&self) -> Arc<dyn CdpConnection> {
-        self.connection.clone()
+        Arc::clone(&self.connection) as Arc<dyn CdpConnection>
     }
 
-    async fn navigate(&self, url: &str) -> Result<NavigationResult, Error> {
+    async fn navigate(&self, url: &str, _timeout_ms: u64) -> Result<NavigationResult, Error> {
         *self.url.lock().await = Some(url.to_string());
         Ok(NavigationResult {
             navigation_id: Some(uuid::Uuid::new_v4().to_string()),
@@ -142,37 +155,21 @@ impl CdpClient for MockCdpClient {
     }
 
     async fn evaluate(&self, script: &str, _await_promise: bool) -> Result<EvaluationResult, Error> {
-        // Simple mock evaluation for testing
-        if script.contains("document.title") {
-            Ok(EvaluationResult::String("Test Page".to_string()))
-        } else if script.contains("+") {
-            // Simple arithmetic evaluation for testing
-            let parts: Vec<&str> = script.split('+').collect();
-            if parts.len() == 2 {
-                let a: f64 = parts[0].trim().parse().unwrap_or(0.0);
-                let b: f64 = parts[1].trim().parse().unwrap_or(0.0);
-                Ok(EvaluationResult::Number(a + b))
-            } else {
-                Ok(EvaluationResult::String(script.to_string()))
+        Ok(match script {
+            s if s.contains("document.title") => EvaluationResult::String("Test Page".to_string()),
+            s if s.contains("window.location.href") => {
+                EvaluationResult::String(self.url.lock().await.clone().unwrap_or_default())
             }
-        } else if script.contains("window.location.href") {
-            let url = self.url.lock().await.clone().unwrap_or_default();
-            Ok(EvaluationResult::String(url))
-        } else {
-            Ok(EvaluationResult::String("mock result".to_string()))
-        }
+            s if s.contains('+') => Self::eval_arithmetic(s),
+            _ => EvaluationResult::String("mock result".to_string()),
+        })
     }
 
     async fn screenshot(&self, format: ScreenshotFormat) -> Result<Vec<u8>, Error> {
-        // Return a minimal 1x1 PNG image
         Ok(match format {
-            ScreenshotFormat::Png => vec![
-                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
-                0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-                0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
-            ],
-            ScreenshotFormat::Jpeg(_) => vec![0xFF, 0xD8, 0xFF, 0xE0],
-            ScreenshotFormat::WebP(_) => vec![0x52, 0x49, 0x46, 0x46],
+            ScreenshotFormat::Png => PNG_HEADER.to_vec(),
+            ScreenshotFormat::Jpeg(_) => JPEG_HEADER.to_vec(),
+            ScreenshotFormat::WebP(_) => WEBP_HEADER.to_vec(),
         })
     }
 
@@ -200,18 +197,12 @@ impl CdpClient for MockCdpClient {
             return Err(Error::cdp(format!("{:?}", error)));
         }
 
-        if let Some(result) = response.result {
-            Ok(result)
-        } else {
-            Err(Error::cdp("No result in response"))
-        }
+        response.result.ok_or_else(|| Error::cdp("No result in response"))
     }
 
     async fn subscribe_events(&self, _event_type: &str) -> Result<tokio::sync::mpsc::Receiver<CdpEvent>, Error> {
-        let (_tx, rx) = tokio::sync::mpsc::channel(100);
-        // In a real implementation, we would register the event listener
-        // For mock, just return an empty channel
-        Ok(rx)
+        // Return empty channel for mock
+        Ok(tokio::sync::mpsc::channel(100).1)
     }
 }
 
@@ -219,6 +210,7 @@ impl CdpClient for MockCdpClient {
 #[derive(Debug)]
 pub struct MockCdpBrowser {
     is_active: AtomicBool,
+    contexts: Arc<Mutex<Vec<BrowserContextInfo>>>,
 }
 
 impl MockCdpBrowser {
@@ -226,6 +218,7 @@ impl MockCdpBrowser {
     pub fn new() -> Self {
         Self {
             is_active: AtomicBool::new(true),
+            contexts: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -242,7 +235,6 @@ impl CdpBrowser for MockCdpBrowser {
         if !self.is_active.load(Ordering::Relaxed) {
             return Err(Error::cdp("Browser is closed"));
         }
-
         Ok(Arc::new(MockCdpClient::new()))
     }
 
@@ -269,11 +261,59 @@ impl CdpBrowser for MockCdpBrowser {
             return Err(Error::cdp("Browser is closed"));
         }
 
-        // Return a mock WebSocket URL for testing
-        let target_id = uuid::Uuid::new_v4().to_string();
-        let ws_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
-        tracing::debug!("Mock: Created target {} with URL {} => {}", target_id, url, ws_url);
+        let ws_url = format!("ws://localhost:9222/devtools/page/{}", uuid::Uuid::new_v4());
+        tracing::debug!("Mock: Created target for URL {} => {}", url, ws_url);
         Ok(ws_url)
+    }
+
+    async fn create_browser_context(
+        &self,
+        proxy_server: Option<String>,
+    ) -> Result<BrowserContextInfo, Error> {
+        if !self.is_active.load(Ordering::Relaxed) {
+            return Err(Error::cdp("Browser is closed"));
+        }
+
+        use std::time::SystemTime;
+
+        let context_id = uuid::Uuid::new_v4().to_string();
+        let created_at = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let context_info = BrowserContextInfo {
+            context_id: context_id.clone(),
+            browser_endpoint: "ws://localhost:9222".to_string(),
+            is_incognito: true,
+            created_at,
+        };
+
+        // Store context
+        self.contexts.lock().await.push(context_info.clone());
+
+        tracing::debug!("Mock: Created browser context with proxy: {:?} => {}", proxy_server, context_id);
+        Ok(context_info)
+    }
+
+    async fn dispose_browser_context(&self, context_id: &str) -> Result<(), Error> {
+        if !self.is_active.load(Ordering::Relaxed) {
+            return Err(Error::cdp("Browser is closed"));
+        }
+
+        let mut contexts = self.contexts.lock().await;
+        contexts.retain(|ctx| ctx.context_id != context_id);
+
+        tracing::debug!("Mock: Disposed browser context: {}", context_id);
+        Ok(())
+    }
+
+    async fn get_browser_contexts(&self) -> Result<Vec<BrowserContextInfo>, Error> {
+        if !self.is_active.load(Ordering::Relaxed) {
+            return Err(Error::cdp("Browser is closed"));
+        }
+
+        Ok(self.contexts.lock().await.clone())
     }
 }
 
@@ -299,7 +339,7 @@ mod tests {
         let client = MockCdpClient::new();
 
         let result = client
-            .navigate("https://example.com")
+            .navigate("https://example.com", 30000)
             .await
             .unwrap();
         assert_eq!(result.url, "https://example.com");
@@ -317,5 +357,25 @@ mod tests {
 
         let version = browser.get_version().await.unwrap();
         assert_eq!(version.product, "Chrome/120.0.0.0");
+    }
+
+    #[tokio::test]
+    async fn test_mock_browser_context() {
+        let browser = MockCdpBrowser::new();
+
+        // Test create browser context
+        let context = browser.create_browser_context(Some("http://proxy.example.com:8080".to_string())).await.unwrap();
+        assert!(context.is_incognito);
+        assert!(context.created_at > 0);
+
+        // Test get browser contexts
+        let contexts = browser.get_browser_contexts().await.unwrap();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].context_id, context.context_id);
+
+        // Test dispose browser context
+        browser.dispose_browser_context(&context.context_id).await.unwrap();
+        let contexts = browser.get_browser_contexts().await.unwrap();
+        assert_eq!(contexts.len(), 0);
     }
 }

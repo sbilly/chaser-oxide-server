@@ -1,17 +1,21 @@
 //! Chaser-Oxide: Rust-based browser automation microservice
-//!
-//! This library provides a gRPC server for browser automation using Chrome DevTools Protocol.
 
+// Core modules
 pub mod error;
 pub mod config;
 
+// Functional modules
 pub mod cdp;
+pub mod process;
 pub mod session;
 pub mod services;
 pub mod stealth;
 
 // Re-exports
 pub use error::{Error, Result};
+
+/// Library version
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Generated protobuf modules
 #[allow(clippy::large_enum_variant)]
@@ -20,6 +24,3 @@ pub mod chaser_oxide {
         tonic::include_proto!("chaser.oxide.v1");
     }
 }
-
-/// Chaser-Oxide library version
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -32,18 +32,18 @@ import (
 	// 从生成的 proto 文件导入
 	// 注意：需要先运行 protoc 生成 Go 代码
 	// 请将 your-module-path 替换为您的实际模块路径
-	commonpb "your-module-path/protos"
 	browserpb "your-module-path/protos"
-	pagepb "your-module-path/protos"
+	commonpb "your-module-path/protos"
 	elementpb "your-module-path/protos"
-	profilepb "your-module-path/protos"
 	eventpb "your-module-path/protos"
+	pagepb "your-module-path/protos"
+	profilepb "your-module-path/protos"
 
 	browsergrpc "your-module-path/protos"
-	pagegrpc "your-module-path/protos"
 	elementgrpc "your-module-path/protos"
-	profilegrpc "your-module-path/protos"
 	eventgrpc "your-module-path/protos"
+	pagegrpc "your-module-path/protos"
+	profilegrpc "your-module-path/protos"
 )
 
 // ChaserOxideClient Chaser-Oxide gRPC 客户端封装
@@ -96,10 +96,10 @@ func exampleBasicNavigation() {
 	fmt.Println("\n1. 启动浏览器...")
 	launchReq := &browserpb.LaunchRequest{
 		Options: &commonpb.BrowserOptions{
-			Headless:   true,
+			Headless:     true,
 			WindowWidth:  1920,
 			WindowHeight: 1080,
-			UserAgent:   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+			UserAgent:    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 		},
 	}
 
@@ -134,13 +134,21 @@ func exampleBasicNavigation() {
 	pageID := createPageResp.PageInfo.PageId
 	fmt.Printf("   页面已创建: %s\n", pageID)
 
+	// 确保资源清理
+	defer func() {
+		fmt.Println("\n7. 清理资源...")
+		_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+		fmt.Println("   资源已清理")
+	}()
+
 	// 3. 导航到 URL
 	fmt.Println("\n3. 导航到 example.com...")
 	navigateReq := &pagepb.NavigateRequest{
 		PageId: pageID,
 		Url:    "https://example.com",
 		Options: &commonpb.NavigationOptions{
-			Timeout:  30000,
+			Timeout: 30000,
 			WaitUntil: &commonpb.NavigationOptions_LoadState{
 				LoadState: commonpb.NavigationOptions_LOAD_STATE_NETWORK_IDLE,
 			},
@@ -211,20 +219,6 @@ func exampleBasicNavigation() {
 	} else if evaluateResp.Error == nil {
 		fmt.Printf("   执行结果: %s\n", evaluateResp.Result.StringValue)
 	}
-
-	// 7. 清理资源
-	fmt.Println("\n7. 清理资源...")
-	closePageReq := &pagepb.ClosePageRequest{
-		PageId: pageID,
-	}
-	_, _ = client.Page.ClosePage(ctx, closePageReq)
-
-	closeBrowserReq := &browserpb.CloseRequest{
-		BrowserId: browserID,
-	}
-	_, _ = client.Browser.Close(ctx, closeBrowserReq)
-
-	fmt.Println("   资源已清理")
 }
 
 // exampleElementInteraction 元素交互示例
@@ -251,6 +245,12 @@ func exampleElementInteraction() {
 		BrowserId: browserID,
 	})
 	pageID := pageResp.PageInfo.PageId
+
+	// 确保资源清理
+	defer func() {
+		_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+	}()
 
 	// 导航到测试页面
 	_, _ = client.Page.Navigate(ctx, &pagepb.NavigateRequest{
@@ -302,10 +302,6 @@ func exampleElementInteraction() {
 	if err == nil && attrResp.Error == nil {
 		fmt.Printf("   class 属性: %s\n", attrResp.Value.Value)
 	}
-
-	// 清理
-	_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
-	_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 }
 
 // exampleEventSubscription 事件订阅示例
@@ -332,6 +328,12 @@ func exampleEventSubscription() {
 		BrowserId: browserID,
 	})
 	pageID := pageResp.PageInfo.PageId
+
+	// 确保资源清理
+	defer func() {
+		_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+	}()
 
 	// 创建事件流
 	fmt.Println("\n1. 订阅页面事件...")
@@ -397,10 +399,6 @@ func exampleEventSubscription() {
 			}
 		}
 	}
-
-	// 清理
-	_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
-	_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 }
 
 // exampleStealthBrowsing 隐身浏览示例
@@ -440,7 +438,7 @@ func exampleStealthBrowsing() {
 	fmt.Println("\n2. 启动浏览器...")
 	launchResp, _ := client.Browser.Launch(ctx, &browserpb.LaunchRequest{
 		Options: &commonpb.BrowserOptions{
-			Headless:   true,
+			Headless:  true,
 			UserAgent: profileResp.Profile.Fingerprint.Headers.UserAgent,
 		},
 	})
@@ -452,6 +450,12 @@ func exampleStealthBrowsing() {
 		BrowserId: browserID,
 	})
 	pageID := pageResp.PageInfo.PageId
+
+	// 确保资源清理
+	defer func() {
+		_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+	}()
 
 	// 4. 应用指纹配置
 	fmt.Println("\n4. 应用指纹配置...")
@@ -503,10 +507,6 @@ func exampleStealthBrowsing() {
 		fmt.Printf("   User-Agent: %s\n", evalResp.Result.StringValue)
 		// 在实际应用中解析 JSON 并显示所有字段
 	}
-
-	// 清理
-	_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
-	_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 }
 
 // exampleBrowserInfo 浏览器信息示例
@@ -540,6 +540,11 @@ func exampleBrowserInfo() {
 	})
 	browserID := launchResp.BrowserInfo.BrowserId
 
+	// 确保资源清理
+	defer func() {
+		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+	}()
+
 	statusReq := &browserpb.GetStatusRequest{
 		BrowserId: browserID,
 	}
@@ -562,9 +567,6 @@ func exampleBrowserInfo() {
 			fmt.Printf("   - %s: %s\n", page.PageId, page.Url)
 		}
 	}
-
-	// 清理
-	_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 }
 
 // exampleCookieManagement Cookie 管理示例
@@ -591,6 +593,12 @@ func exampleCookieManagement() {
 		BrowserId: browserID,
 	})
 	pageID := pageResp.PageInfo.PageId
+
+	// 确保资源清理
+	defer func() {
+		_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+	}()
 
 	// 1. 设置 Cookie
 	fmt.Println("\n1. 设置 Cookie...")
@@ -641,10 +649,6 @@ func exampleCookieManagement() {
 	if err == nil && clearCookiesResp.Error == nil {
 		fmt.Printf("   Cookie 已清除\n")
 	}
-
-	// 清理
-	_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
-	_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 }
 
 // exampleWithErrorHandling 带错误处理的完整示例
@@ -669,7 +673,7 @@ func exampleWithErrorHandling() {
 	// 启动浏览器
 	launchResp, err := client.Browser.Launch(ctx, &browserpb.LaunchRequest{
 		Options: &commonpb.BrowserOptions{
-			Headless:    true,
+			Headless:     true,
 			WindowWidth:  1920,
 			WindowHeight: 1080,
 		},
@@ -708,6 +712,35 @@ func exampleWithErrorHandling() {
 	pageID := pageResp.PageInfo.PageId
 	fmt.Printf("✓ 页面已创建: %s\n", pageID)
 
+	// 确保资源清理
+	defer func() {
+		closePageResp, err := client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{
+			PageId: pageID,
+		})
+
+		if err != nil {
+			log.Printf("   关闭页面失败: %v", err)
+		} else if closePageResp.Error != nil {
+			log.Printf("   关闭页面失败: %s", closePageResp.Error.Message)
+		} else {
+			fmt.Printf("✓ 页面已关闭\n")
+		}
+
+		closeBrowserResp, err := client.Browser.Close(ctx, &browserpb.CloseRequest{
+			BrowserId: browserID,
+		})
+
+		if err != nil {
+			log.Printf("   关闭浏览器失败: %v", err)
+		} else if closeBrowserResp.Error != nil {
+			log.Printf("   关闭浏览器失败: %s", closeBrowserResp.Error.Message)
+		} else {
+			fmt.Printf("✓ 浏览器已关闭\n")
+		}
+
+		fmt.Println("\n操作完成!")
+	}()
+
 	// 导航到 URL
 	navigateResp, err := client.Page.Navigate(ctx, &pagepb.NavigateRequest{
 		PageId: pageID,
@@ -723,33 +756,6 @@ func exampleWithErrorHandling() {
 			navigateResp.Result.Url,
 			navigateResp.Result.StatusCode)
 	}
-
-	// 清理
-	closePageResp, err := client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{
-		PageId: pageID,
-	})
-
-	if err != nil {
-		log.Printf("   关闭页面失败: %v", err)
-	} else if closePageResp.Error != nil {
-		log.Printf("   关闭页面失败: %s", closePageResp.Error.Message)
-	} else {
-		fmt.Printf("✓ 页面已关闭\n")
-	}
-
-	closeBrowserResp, err := client.Browser.Close(ctx, &browserpb.CloseRequest{
-		BrowserId: browserID,
-	})
-
-	if err != nil {
-		log.Printf("   关闭浏览器失败: %v", err)
-	} else if closeBrowserResp.Error != nil {
-		log.Printf("   关闭浏览器失败: %s", closeBrowserResp.Error.Message)
-	} else {
-		fmt.Printf("✓ 浏览器已关闭\n")
-	}
-
-	fmt.Println("\n操作完成!")
 }
 
 func main() {

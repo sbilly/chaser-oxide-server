@@ -216,7 +216,7 @@ async fn test_cdp_send_command() {
 
     // Test Page.navigate
     let nav_result = cdp_client
-        .navigate(&get_test_page_url())
+        .navigate(&get_test_page_url(), 30000)
         .await
         .expect("Failed to navigate");
 
@@ -279,7 +279,7 @@ async fn test_cdp_event_listening() {
     // Trigger an event by navigating
     let client_clone = cdp_client.clone();
     tokio::spawn(async move {
-        let _ = client_clone.navigate(&get_test_page_url()).await;
+        let _ = client_clone.navigate(&get_test_page_url(), 30000).await;
     });
 
     // Wait for event
@@ -341,7 +341,7 @@ async fn test_cdp_screenshot() {
     let cdp_client = super::client::CdpClientImpl::new(connection);
 
     // Navigate to test page
-    let _ = cdp_client.navigate(&get_test_page_url()).await;
+    let _ = cdp_client.navigate(&get_test_page_url(), 30000).await;
 
     // Wait for page to load
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -407,7 +407,7 @@ async fn test_cdp_get_content() {
     let cdp_client = super::client::CdpClientImpl::new(connection);
 
     // Navigate to test page
-    let _ = cdp_client.navigate(&get_test_page_url()).await;
+    let _ = cdp_client.navigate(&get_test_page_url(), 30000).await;
 
     // Wait for page to load
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;

@@ -6,12 +6,26 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::cdp;
 use crate::cdp::traits::CdpClient;
 use crate::session::traits::{
     EvaluationResult, LoadState, NavigationOptions, NavigationResult,
-    PageContext, ScreenshotOptions,
+    PageContext, ScreenshotOptions, ScreenshotFormat as SessionScreenshotFormat,
 };
 use crate::Error;
+
+/// Convert CDP evaluation result to session evaluation result
+impl From<cdp::traits::EvaluationResult> for EvaluationResult {
+    fn from(value: cdp::traits::EvaluationResult) -> Self {
+        match value {
+            cdp::traits::EvaluationResult::String(s) => Self::String(s),
+            cdp::traits::EvaluationResult::Number(n) => Self::Number(n),
+            cdp::traits::EvaluationResult::Bool(b) => Self::Bool(b),
+            cdp::traits::EvaluationResult::Null => Self::Null,
+            cdp::traits::EvaluationResult::Object(v) => Self::Object(v),
+        }
+    }
+}
 
 /// Page context implementation
 #[derive(Debug)]
@@ -39,13 +53,32 @@ impl PageContextImpl {
         }
     }
 
-    /// Convert screenshot options
-    fn convert_screenshot_format(format: crate::session::traits::ScreenshotFormat) -> crate::cdp::traits::ScreenshotFormat {
-        match format {
-            crate::session::traits::ScreenshotFormat::Png => crate::cdp::traits::ScreenshotFormat::Png,
-            crate::session::traits::ScreenshotFormat::Jpeg => crate::cdp::traits::ScreenshotFormat::Jpeg(100),
-            crate::session::traits::ScreenshotFormat::WebP => crate::cdp::traits::ScreenshotFormat::WebP(100),
+    /// Ensure page is active, return error if not
+    async fn ensure_active(&self) -> Result<(), Error> {
+        let active = *self.is_active.read().await;
+        if active {
+            Ok(())
+        } else {
+            Err(Error::page_not_found(&self.id))
         }
+    }
+
+    /// Convert screenshot options
+    fn convert_screenshot_format(format: SessionScreenshotFormat) -> cdp::traits::ScreenshotFormat {
+        match format {
+            SessionScreenshotFormat::Png => cdp::traits::ScreenshotFormat::Png,
+            SessionScreenshotFormat::Jpeg => cdp::traits::ScreenshotFormat::Jpeg(100),
+            SessionScreenshotFormat::WebP => cdp::traits::ScreenshotFormat::WebP(100),
+        }
+    }
+
+    /// Navigate browser history (back or forward)
+    async fn navigate_history(&self, direction: &str) -> Result<(), Error> {
+        let javascript_url = format!("javascript:history.{}()", direction);
+        self.cdp_client
+            .call_method("Page.navigate", serde_json::json!({ "url": javascript_url }))
+            .await?;
+        Ok(())
     }
 }
 
@@ -60,27 +93,17 @@ impl PageContext for PageContextImpl {
     }
 
     async fn navigate(&self, url: &str, options: NavigationOptions) -> Result<NavigationResult, Error> {
-        let active = *self.is_active.read().await;
-        if !active {
-            return Err(Error::page_not_found(&self.id));
-        }
+        self.ensure_active().await?;
 
-        // Navigate using CDP
-        let nav_result = self.cdp_client.navigate(url).await?;
+        let nav_result = self.cdp_client.navigate(url, options.timeout).await?;
 
         // Wait for load state if specified
-        match options.wait_until {
-            LoadState::Load => {
-                // In real implementation, wait for load event
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            }
-            LoadState::DOMContentLoaded => {
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            }
-            LoadState::NetworkIdle | LoadState::NetworkAlmostIdle => {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            }
-        }
+        let delay_ms = match options.wait_until {
+            LoadState::Load => 100,
+            LoadState::DOMContentLoaded => 50,
+            LoadState::NetworkIdle | LoadState::NetworkAlmostIdle => 500,
+        };
+        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
 
         Ok(NavigationResult {
             url: nav_result.url,
@@ -90,101 +113,51 @@ impl PageContext for PageContextImpl {
     }
 
     async fn get_content(&self) -> Result<String, Error> {
-        let active = *self.is_active.read().await;
-        if !active {
-            return Err(Error::page_not_found(&self.id));
-        }
-
+        self.ensure_active().await?;
         self.cdp_client.get_content().await
     }
 
     async fn set_content(&self, html: &str) -> Result<(), Error> {
-        let active = *self.is_active.read().await;
-        if !active {
-            return Err(Error::page_not_found(&self.id));
-        }
-
+        self.ensure_active().await?;
         self.cdp_client.set_content(html).await
     }
 
     async fn reload(&self, ignore_cache: bool) -> Result<(), Error> {
-        let active = *self.is_active.read().await;
-        if !active {
-            return Err(Error::page_not_found(&self.id));
-        }
-
+        self.ensure_active().await?;
         self.cdp_client.reload(ignore_cache).await
     }
 
     async fn go_back(&self) -> Result<(), Error> {
-        let active = *self.is_active.read().await;
-        if !active {
-            return Err(Error::page_not_found(&self.id));
-        }
-
-        // Use CDP to navigate back
-        self.cdp_client
-            .call_method(
-                "Page.navigate",
-                serde_json::json!({ "url": "javascript:history.back()" }),
-            )
-            .await?;
-        Ok(())
+        self.ensure_active().await?;
+        self.navigate_history("back").await
     }
 
     async fn go_forward(&self) -> Result<(), Error> {
-        let active = *self.is_active.read().await;
-        if !active {
-            return Err(Error::page_not_found(&self.id));
-        }
-
-        // Use CDP to navigate forward
-        self.cdp_client
-            .call_method(
-                "Page.navigate",
-                serde_json::json!({ "url": "javascript:history.forward()" }),
-            )
-            .await?;
-        Ok(())
+        self.ensure_active().await?;
+        self.navigate_history("forward").await
     }
 
     async fn evaluate(&self, script: &str, await_promise: bool) -> Result<EvaluationResult, Error> {
-        let active = *self.is_active.read().await;
-        if !active {
-            return Err(Error::page_not_found(&self.id));
-        }
+        self.ensure_active().await?;
 
         let result = self.cdp_client.evaluate(script, await_promise).await?;
         tracing::debug!("PageContext::evaluate: CDP returned {:?}", result);
 
-        let session_result = match result {
-            crate::cdp::traits::EvaluationResult::String(s) => EvaluationResult::String(s),
-            crate::cdp::traits::EvaluationResult::Number(n) => EvaluationResult::Number(n),
-            crate::cdp::traits::EvaluationResult::Bool(b) => EvaluationResult::Bool(b),
-            crate::cdp::traits::EvaluationResult::Null => EvaluationResult::Null,
-            crate::cdp::traits::EvaluationResult::Object(v) => EvaluationResult::Object(v),
-        };
+        let session_result: EvaluationResult = result.into();
         tracing::debug!("PageContext::evaluate: returning {:?}", session_result);
         Ok(session_result)
     }
 
     async fn screenshot(&self, options: ScreenshotOptions) -> Result<Vec<u8>, Error> {
-        let active = *self.is_active.read().await;
-        if !active {
-            return Err(Error::page_not_found(&self.id));
-        }
+        self.ensure_active().await?;
 
         let format = Self::convert_screenshot_format(options.format);
         self.cdp_client.screenshot(format).await
     }
 
     async fn set_viewport(&self, width: u32, height: u32, device_scale_factor: f64) -> Result<(), Error> {
-        let active = *self.is_active.read().await;
-        if !active {
-            return Err(Error::page_not_found(&self.id));
-        }
+        self.ensure_active().await?;
 
-        // Ignore result
         let _ = self.cdp_client
             .call_method(
                 "Emulation.setDeviceMetricsOverride",

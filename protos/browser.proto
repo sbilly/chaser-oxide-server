@@ -27,6 +27,15 @@ service BrowserService {
 
     // Connect to an existing browser instance
     rpc ConnectTo(ConnectRequest) returns (ConnectResponse);
+
+    // Create a new incognito context
+    rpc CreateIncognitoContext(CreateContextRequest) returns (CreateContextResponse);
+
+    // Close a specific context
+    rpc CloseIncognitoContext(CloseContextRequest) returns (CloseContextResponse);
+
+    // List all contexts
+    rpc ListContexts(ListContextsRequest) returns (ListContextsResponse);
 }
 
 // ============= Launch Browser =============
@@ -144,4 +153,45 @@ message ConnectResponse {
         BrowserInfo browser_info = 1;
         Error error = 2;
     }
+}
+
+// ============= Context Management =============
+
+message CreateContextRequest {
+    string browser_id = 1;
+    string proxy_server = 2;
+}
+
+message CreateContextResponse {
+    oneof response {
+        BrowserContextInfo context_info = 1;
+        Error error = 2;
+    }
+}
+
+message CloseContextRequest {
+    string browser_id = 1;
+    string context_id = 2;
+}
+
+message CloseContextResponse {
+    oneof response {
+        Empty success = 1;
+        Error error = 2;
+    }
+}
+
+message ListContextsRequest {
+    string browser_id = 1;
+}
+
+message ListContextsResponse {
+    oneof response {
+        ListContextsResult result = 1;
+        Error error = 2;
+    }
+}
+
+message ListContextsResult {
+    repeated BrowserContextInfo contexts = 1;
 }

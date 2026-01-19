@@ -56,6 +56,7 @@ pub use traits::{
     BrowserOptions, PageOptions, ScreenshotOptions, NavigationOptions,
     LoadState, ScreenshotFormat, ClipRegion,
     NavigationResult, EvaluationResult, BoundingBox,
+    BrowserContextInfo,
 };
 
 // Re-export implementation structs

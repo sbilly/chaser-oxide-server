@@ -101,6 +101,67 @@ impl CdpBrowserImpl {
 
         Ok(targets)
     }
+
+    /// Send CDP command to browser endpoint
+    ///
+    /// This method creates a temporary connection to send browser-level commands
+    /// like Target.createBrowserContext and Target.disposeBrowserContext.
+    async fn send_browser_command(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, Error> {
+        use std::time::SystemTime;
+
+        // Get browser target endpoint (first target from /json)
+        let http_endpoint = self.endpoint.replace("ws://", "http://").replace("wss://", "https://");
+
+        let client = reqwest::Client::builder()
+            .build()
+            .map_err(|e| Error::internal(format!("Failed to create HTTP client: {}", e)))?;
+
+        let url = format!("{}/json", http_endpoint);
+
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::internal(format!("Failed to fetch targets: {}", e)))?;
+
+        let targets_json: Vec<serde_json::Value> = response
+            .json()
+            .await
+            .map_err(|e| Error::internal(format!("Failed to parse targets: {}", e)))?;
+
+        // Get the first target's WebSocket URL (typically the browser main page)
+        let browser_ws_url = targets_json
+            .first()
+            .and_then(|t| t.get("webSocketDebuggerUrl"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::internal("No browser targets available"))?;
+
+        debug!("Connecting to browser via WebSocket: {}", browser_ws_url);
+
+        // Create temporary connection
+        let connection = CdpWebSocketConnection::new(browser_ws_url).await?;
+
+        // Send command
+        let cdp_response = connection.send_command(method, params).await?;
+
+        // Close connection
+        let _ = connection.close().await;
+
+        if let Some(error) = cdp_response.error {
+            return Err(Error::cdp(format!(
+                "{}: {} (code: {})",
+                error.message,
+                error.code,
+                error.data.as_ref().map_or("".to_string(), |d| d.to_string())
+            )));
+        }
+
+        cdp_response.result.ok_or_else(|| Error::cdp("No result returned"))
+    }
 }
 
 #[async_trait]
@@ -279,6 +340,91 @@ Original error: {}"#,
         debug!("Created new target with WebSocket URL: {}", ws_url);
 
         Ok(ws_url.to_string())
+    }
+
+    /// Create a new browser context (incognito)
+    async fn create_browser_context(
+        &self,
+        proxy_server: Option<String>,
+    ) -> Result<BrowserContextInfo, Error> {
+        use std::time::SystemTime;
+
+        info!("Creating browser context with proxy: {:?}", proxy_server);
+
+        let mut params = serde_json::Map::new();
+        if let Some(proxy) = proxy_server {
+            params.insert("proxyServer".to_string(), serde_json::json!(proxy));
+        }
+
+        let response = self
+            .send_browser_command("Target.createBrowserContext", serde_json::json!(params))
+            .await
+            .map_err(|e| Error::cdp(format!("Failed to create browser context: {}", e)))?;
+
+        let context_id = response
+            .get("browserContextId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::cdp("No context ID returned"))?
+            .to_string();
+
+        let created_at = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        info!("Created browser context: {}", context_id);
+
+        Ok(BrowserContextInfo {
+            context_id,
+            browser_endpoint: self.endpoint.clone(),
+            is_incognito: true,
+            created_at,
+        })
+    }
+
+    /// Dispose a browser context
+    async fn dispose_browser_context(&self, context_id: &str) -> Result<(), Error> {
+        info!("Disposing browser context: {}", context_id);
+
+        let params = serde_json::json!({
+            "browserContextId": context_id
+        });
+
+        self.send_browser_command("Target.disposeBrowserContext", params)
+            .await
+            .map_err(|e| Error::cdp(format!("Failed to dispose browser context: {}", e)))?;
+
+        info!("Successfully disposed browser context: {}", context_id);
+
+        Ok(())
+    }
+
+    /// Get all browser contexts
+    async fn get_browser_contexts(&self) -> Result<Vec<BrowserContextInfo>, Error> {
+        info!("Getting browser contexts");
+
+        let targets = self.get_targets().await?;
+
+        let mut contexts: std::collections::HashMap<String, BrowserContextInfo> =
+            std::collections::HashMap::new();
+
+        for target in targets {
+            // Extract browser context ID from target info if present
+            if let Some(context_id) = target.target_id.strip_prefix("browser_context_") {
+                contexts.entry(context_id.to_string()).or_insert_with(|| {
+                    BrowserContextInfo {
+                        context_id: context_id.to_string(),
+                        browser_endpoint: self.endpoint.clone(),
+                        is_incognito: true,
+                        created_at: 0,
+                    }
+                });
+            }
+        }
+
+        debug!("Found {} browser contexts", contexts.len());
+
+        Ok(contexts.into_values().collect())
     }
 }
 

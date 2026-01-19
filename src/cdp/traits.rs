@@ -1,6 +1,6 @@
 //! CDP (Chrome DevTools Protocol) layer traits
 //!
-//! This module defines the abstract interfaces for CDP communication.
+//! Defines the abstract interfaces for CDP communication.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -45,11 +45,7 @@ pub struct CdpError {
 #[async_trait]
 pub trait CdpConnection: Send + Sync + std::fmt::Debug {
     /// Send a CDP command and wait for response
-    async fn send_command(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> Result<CdpResponse, crate::Error>;
+    async fn send_command(&self, method: &str, params: Value) -> Result<CdpResponse, crate::Error>;
 
     /// Subscribe to CDP events
     async fn listen_events(&self) -> Result<tokio::sync::mpsc::Receiver<CdpEvent>, crate::Error>;
@@ -61,8 +57,6 @@ pub trait CdpConnection: Send + Sync + std::fmt::Debug {
     fn is_active(&self) -> bool;
 }
 
-/// CDP client trait
-///
 /// High-level CDP client that provides typed methods for common CDP operations.
 #[async_trait]
 pub trait CdpClient: Send + Sync + std::fmt::Debug {
@@ -70,7 +64,7 @@ pub trait CdpClient: Send + Sync + std::fmt::Debug {
     fn connection(&self) -> Arc<dyn CdpConnection>;
 
     /// Navigate to a URL
-    async fn navigate(&self, url: &str) -> Result<NavigationResult, crate::Error>;
+    async fn navigate(&self, url: &str, timeout_ms: u64) -> Result<NavigationResult, crate::Error>;
 
     /// Evaluate JavaScript in the page
     async fn evaluate(&self, script: &str, await_promise: bool) -> Result<EvaluationResult, crate::Error>;
@@ -128,15 +122,13 @@ pub enum EvaluationResult {
 pub enum ScreenshotFormat {
     /// PNG format
     Png,
-    /// JPEG format
-    Jpeg(u8), // quality 0-100
-    /// WebP format
-    WebP(u8), // quality 0-100
+    /// JPEG format (quality 0-100)
+    Jpeg(u8),
+    /// WebP format (quality 0-100)
+    WebP(u8),
 }
 
-/// CDP browser trait
-///
-/// Controls browser-level operations via CDP.
+/// CDP browser trait for browser-level operations.
 #[async_trait]
 pub trait CdpBrowser: Send + Sync + std::fmt::Debug {
     /// Create a new CDP client for a browser context
@@ -155,6 +147,18 @@ pub trait CdpBrowser: Send + Sync + std::fmt::Debug {
     ///
     /// Returns the WebSocket URL of the newly created target.
     async fn create_target(&self, url: &str) -> Result<String, crate::Error>;
+
+    /// Create a new browser context (incognito)
+    async fn create_browser_context(
+        &self,
+        proxy_server: Option<String>,
+    ) -> Result<BrowserContextInfo, crate::Error>;
+
+    /// Dispose a browser context
+    async fn dispose_browser_context(&self, context_id: &str) -> Result<(), crate::Error>;
+
+    /// Get all browser contexts
+    async fn get_browser_contexts(&self) -> Result<Vec<BrowserContextInfo>, crate::Error>;
 }
 
 /// Browser version information
@@ -183,4 +187,17 @@ pub struct TargetInfo {
     pub url: String,
     /// Whether target can be attached to
     pub attached: bool,
+}
+
+/// Browser context information
+#[derive(Debug, Clone)]
+pub struct BrowserContextInfo {
+    /// Context ID
+    pub context_id: String,
+    /// Browser endpoint
+    pub browser_endpoint: String,
+    /// Whether this is an incognito context
+    pub is_incognito: bool,
+    /// Creation timestamp
+    pub created_at: i64,
 }

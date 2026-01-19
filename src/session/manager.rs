@@ -6,19 +6,41 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use crate::cdp::browser::CdpBrowserImpl;
 use crate::cdp::traits::CdpBrowser;
+use crate::process::ProcessManager;
 use crate::session::traits::{
     BrowserContext, BrowserOptions, PageContext, PageOptions, SessionManager,
 };
 use crate::Error;
 
+/// Lock guard type alias for read operations on browsers map
+type BrowsersReadGuard<'a> = std::sync::RwLockReadGuard<'a, HashMap<String, Arc<dyn BrowserContext>>>;
+
+/// Lock guard type alias for write operations on browsers map
+type BrowsersWriteGuard<'a> = std::sync::RwLockWriteGuard<'a, HashMap<String, Arc<dyn BrowserContext>>>;
+
 /// Session manager implementation
 pub struct SessionManagerImpl {
     browsers: Arc<RwLock<HashMap<String, Arc<dyn BrowserContext>>>>,
     cdp_browser_factory: Arc<dyn Fn() -> Result<Arc<dyn CdpBrowser>, Error> + Send + Sync>,
+    process_manager: Option<Arc<ProcessManager>>,
 }
 
 impl SessionManagerImpl {
+    /// Acquire read lock on browsers map with consistent error handling
+    fn read_browsers(&self) -> Result<BrowsersReadGuard<'_>, Error> {
+        self.browsers
+            .read()
+            .map_err(|e| Error::internal(format!("Lock error: {}", e)))
+    }
+
+    /// Acquire write lock on browsers map with consistent error handling
+    fn write_browsers(&self) -> Result<BrowsersWriteGuard<'_>, Error> {
+        self.browsers
+            .write()
+            .map_err(|e| Error::internal(format!("Lock error: {}", e)))
+    }
     /// Create a new session manager
     pub fn new<F>(factory: F) -> Self
     where
@@ -27,12 +49,93 @@ impl SessionManagerImpl {
         Self {
             browsers: Arc::new(RwLock::new(HashMap::new())),
             cdp_browser_factory: Arc::new(factory),
+            process_manager: None,
+        }
+    }
+
+    /// Create a new session manager with ProcessManager support
+    ///
+    /// This allows the session manager to automatically launch and manage
+    /// Chrome browser processes.
+    ///
+    /// # Arguments
+    ///
+    /// * `factory` - CDP browser factory function
+    /// * `process_manager` - Process manager for launching browsers
+    pub fn with_process_manager<F>(
+        factory: F,
+        process_manager: Arc<ProcessManager>,
+    ) -> Self
+    where
+        F: Fn() -> Result<Arc<dyn CdpBrowser>, Error> + Send + Sync + 'static,
+    {
+        Self {
+            browsers: Arc::new(RwLock::new(HashMap::new())),
+            cdp_browser_factory: Arc::new(factory),
+            process_manager: Some(process_manager),
         }
     }
 
     /// Create a session manager with a mock CDP browser for testing
     pub fn mock() -> Self {
         Self::new(|| Ok(Arc::new(crate::cdp::mock::MockCdpBrowser::new())))
+    }
+
+    /// Store a browser context in the manager
+    fn insert_browser(&self, browser_id: String, browser: Arc<dyn BrowserContext>) -> Result<(), Error> {
+        self.write_browsers()?.insert(browser_id, browser);
+        Ok(())
+    }
+
+    /// Remove a browser from the manager by ID
+    fn remove_browser(&self, browser_id: &str) -> Result<(), Error> {
+        self.write_browsers()?.remove(browser_id);
+        Ok(())
+    }
+
+    /// Collect IDs of all inactive browsers
+    fn collect_inactive_browser_ids(&self) -> Result<Vec<String>, Error> {
+        let browsers = self.read_browsers()?;
+        Ok(browsers
+            .iter()
+            .filter(|(_, b)| !b.is_active())
+            .map(|(id, _)| id.clone())
+            .collect())
+    }
+
+    /// Find a page across all browsers by its ID
+    async fn find_page(&self, page_id: &str) -> Result<Arc<dyn PageContext>, Error> {
+        // Collect browser Arcs first to avoid holding lock across await
+        let browsers: Vec<Arc<dyn BrowserContext>> = self
+            .read_browsers()?
+            .values()
+            .cloned()
+            .collect();
+
+        for browser in browsers {
+            if let Ok(pages) = browser.get_pages().await {
+                for page in pages {
+                    if page.id() == page_id {
+                        return Ok(page);
+                    }
+                }
+            }
+        }
+
+        Err(Error::page_not_found(page_id))
+    }
+
+    /// Create a CDP browser, either via process manager or factory
+    async fn create_cdp_browser(&self) -> Result<(String, Arc<dyn CdpBrowser>), Error> {
+        if let Some(pm) = &self.process_manager {
+            let (id, cdp_endpoint) = pm.launch_browser().await?;
+            let cdp = Arc::new(CdpBrowserImpl::new(cdp_endpoint)) as Arc<dyn CdpBrowser>;
+            Ok((id, cdp))
+        } else {
+            let cdp = (self.cdp_browser_factory)()?;
+            let browser_id = uuid::Uuid::new_v4().to_string();
+            Ok((browser_id, cdp))
+        }
     }
 }
 
@@ -46,56 +149,38 @@ impl Default for SessionManagerImpl {
 #[async_trait]
 impl SessionManager for SessionManagerImpl {
     async fn create_browser(&self, options: BrowserOptions) -> Result<String, Error> {
-        // Create CDP browser
-        let cdp_browser = (self.cdp_browser_factory)()?;
+        let (browser_id, cdp_browser) = self.create_cdp_browser().await?;
 
-        // Create browser context
-        let browser = Arc::new(crate::session::browser::BrowserContextImpl::new(
-            options.clone(),
+        let browser = Arc::new(crate::session::browser::BrowserContextImpl::with_id(
+            browser_id.clone(),
+            options,
             cdp_browser,
         ));
 
-        // Store browser
-        let browser_id = browser.id().to_string();
-        self.browsers
-            .write()
-            .map_err(|e| Error::internal(format!("Lock error: {}", e)))?
-            .insert(browser_id.clone(), browser);
-
+        self.insert_browser(browser_id.clone(), browser)?;
         Ok(browser_id)
     }
 
     async fn get_browser(&self, browser_id: &str) -> Result<Arc<dyn BrowserContext>, Error> {
-        self.browsers
-            .read()
-            .map_err(|e| Error::internal(format!("Lock error: {}", e)))?
+        self.read_browsers()?
             .get(browser_id)
             .cloned()
             .ok_or_else(|| Error::browser_not_found(browser_id))
     }
 
     async fn close_browser(&self, browser_id: &str) -> Result<(), Error> {
-        // Get browser
         let browser = self.get_browser(browser_id).await?;
-
-        // Close browser
         browser.close().await?;
 
-        // Remove from map
-        self.browsers
-            .write()
-            .map_err(|e| Error::internal(format!("Lock error: {}", e)))?
-            .remove(browser_id);
+        if let Some(pm) = &self.process_manager {
+            pm.terminate_browser(browser_id).await?;
+        }
 
-        Ok(())
+        self.remove_browser(browser_id)
     }
 
     async fn list_browsers(&self) -> Result<Vec<String>, Error> {
-        let browsers = self
-            .browsers
-            .read()
-            .map_err(|e| Error::internal(format!("Lock error: {}", e)))?;
-        Ok(browsers.keys().cloned().collect())
+        Ok(self.read_browsers()?.keys().cloned().collect())
     }
 
     async fn create_page(
@@ -108,28 +193,7 @@ impl SessionManager for SessionManagerImpl {
     }
 
     async fn get_page(&self, page_id: &str) -> Result<Arc<dyn PageContext>, Error> {
-        // Search through all browsers to find the page
-        // Collect browser Arcs first to avoid holding lock across await
-        let browser_refs: Vec<Arc<dyn BrowserContext>> = self
-            .browsers
-            .read()
-            .map_err(|e| Error::internal(format!("Lock error: {}", e)))?
-            .values()
-            .cloned()
-            .collect();
-        // Lock guard dropped here
-
-        for browser in browser_refs {
-            if let Ok(pages) = browser.get_pages().await {
-                for page in pages {
-                    if page.id() == page_id {
-                        return Ok(page);
-                    }
-                }
-            }
-        }
-
-        Err(Error::page_not_found(page_id))
+        self.find_page(page_id).await
     }
 
     async fn close_page(&self, page_id: &str) -> Result<(), Error> {
@@ -138,29 +202,10 @@ impl SessionManager for SessionManagerImpl {
     }
 
     async fn cleanup(&self) -> Result<(), Error> {
-        // Close all inactive browsers
-        let mut to_remove = Vec::new();
+        let to_remove = self.collect_inactive_browser_ids()?;
 
-        {
-            let browsers = self
-                .browsers
-                .read()
-                .map_err(|e| Error::internal(format!("Lock error: {}", e)))?;
-
-            for (id, browser) in browsers.iter() {
-                if !browser.is_active() {
-                    to_remove.push(id.clone());
-                }
-            }
-        }
-
-        // Remove inactive browsers
         if !to_remove.is_empty() {
-            let mut browsers = self
-                .browsers
-                .write()
-                .map_err(|e| Error::internal(format!("Lock error: {}", e)))?;
-
+            let mut browsers = self.write_browsers()?;
             for id in to_remove {
                 browsers.remove(&id);
             }

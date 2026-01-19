@@ -77,8 +77,7 @@ async fn test_element_finder_find_multiple() {
 async fn test_element_interactor_click() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "button".to_string(),
-        Some("Submit".to_string()),
+        "Submit".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -92,8 +91,7 @@ async fn test_element_interactor_click() {
 async fn test_element_interactor_type_text() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "input".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -107,8 +105,7 @@ async fn test_element_interactor_type_text() {
 async fn test_element_interactor_fill() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "input".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -122,8 +119,7 @@ async fn test_element_interactor_fill() {
 async fn test_element_interactor_get_text() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "div".to_string(),
-        Some("Test content".to_string()),
+        "Test content".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -138,8 +134,7 @@ async fn test_element_interactor_get_text() {
 async fn test_element_interactor_get_html() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "div".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -154,8 +149,7 @@ async fn test_element_interactor_get_html() {
 async fn test_element_interactor_hover() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "button".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -169,8 +163,7 @@ async fn test_element_interactor_hover() {
 async fn test_element_interactor_focus() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "input".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -184,8 +177,7 @@ async fn test_element_interactor_focus() {
 async fn test_element_interactor_is_visible() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "div".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -200,8 +192,7 @@ async fn test_element_interactor_is_visible() {
 async fn test_element_interactor_is_enabled() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "button".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -216,8 +207,7 @@ async fn test_element_interactor_is_enabled() {
 async fn test_element_interactor_get_bounding_box() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "div".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -235,8 +225,7 @@ async fn test_element_interactor_get_bounding_box() {
 async fn test_element_interactor_get_attribute() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "input".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -251,8 +240,7 @@ async fn test_element_interactor_get_attribute() {
 async fn test_element_interactor_get_attributes() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "input".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -272,8 +260,7 @@ async fn test_element_interactor_get_attributes() {
 async fn test_element_interactor_select_option() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "select".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -289,8 +276,7 @@ async fn test_element_interactor_select_option() {
 async fn test_element_interactor_upload_file() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "input".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -305,8 +291,7 @@ async fn test_element_interactor_upload_file() {
 async fn test_element_interactor_upload_file_empty_paths() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "input".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -321,8 +306,7 @@ async fn test_element_interactor_upload_file_empty_paths() {
 async fn test_element_interactor_scroll_into_view() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "div".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -336,8 +320,7 @@ async fn test_element_interactor_scroll_into_view() {
 async fn test_element_interactor_press_key() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "input".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -351,8 +334,7 @@ async fn test_element_interactor_press_key() {
 async fn test_element_interactor_drag_and_drop() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "div".to_string(),
-        None,
+        "".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);
@@ -366,8 +348,7 @@ async fn test_element_interactor_drag_and_drop() {
 async fn test_element_interactor_clear_value() {
     let element = Arc::new(MockElement::new(
         "test-page".to_string(),
-        "input".to_string(),
-        Some("existing value".to_string()),
+        "existing value".to_string(),
     ));
 
     let interactor = ElementInteractor::new(element);

@@ -68,6 +68,8 @@ def example_custom_profile():
     print("=" * 60)
 
     client = ChaserOxideClient()
+    browser_id = None
+    page_id = None
 
     try:
         # 1. 创建自定义配置
@@ -246,13 +248,22 @@ def example_custom_profile():
                 score += 1
             print(f"   总体评分: {score}/3")
 
-        # 清理
-        client.page.ClosePage(page_pb2.ClosePageRequest(page_id=page_id))
-        client.browser.Close(browser_pb2.CloseRequest(browser_id=browser_id))
-
     except grpc.RpcError as e:
         print(f"\nRPC 错误: {e.code()} - {e.details()}")
     finally:
+        # 清理资源（无论是否出错都会执行）
+        if page_id:
+            try:
+                client.page.ClosePage(page_pb2.ClosePageRequest(page_id=page_id))
+            except Exception:
+                pass  # 忽略清理错误
+
+        if browser_id:
+            try:
+                client.browser.Close(browser_pb2.CloseRequest(browser_id=browser_id))
+            except Exception:
+                pass  # 忽略清理错误
+
         client.close()
 
 
@@ -263,6 +274,8 @@ def example_human_behavior():
     print("=" * 60)
 
     client = ChaserOxideClient()
+    browser_id = None
+    page_id = None
 
     try:
         # 启动浏览器
@@ -374,13 +387,22 @@ def example_human_behavior():
         print("   - 模拟人类反应时间")
         print("   - 随机偏移和抖动")
 
-        # 清理
-        client.page.ClosePage(page_pb2.ClosePageRequest(page_id=page_id))
-        client.browser.Close(browser_pb2.CloseRequest(browser_id=browser_id))
-
     except grpc.RpcError as e:
         print(f"\nRPC 错误: {e.code()} - {e.details()}")
     finally:
+        # 清理资源（无论是否出错都会执行）
+        if page_id:
+            try:
+                client.page.ClosePage(page_pb2.ClosePageRequest(page_id=page_id))
+            except Exception:
+                pass  # 忽略清理错误
+
+        if browser_id:
+            try:
+                client.browser.Close(browser_pb2.CloseRequest(browser_id=browser_id))
+            except Exception:
+                pass  # 忽略清理错误
+
         client.close()
 
 
@@ -391,6 +413,8 @@ def example_randomized_profiles():
     print("=" * 60)
 
     client = ChaserOxideClient()
+    browser_id = None
+    page_id = None
 
     try:
         # 创建多个随机化配置
@@ -474,14 +498,26 @@ def example_randomized_profiles():
             if not apply_response.HasField('error'):
                 print(f"   配置已应用到页面")
 
-            # 清理
-            client.page.ClosePage(page_pb2.ClosePageRequest(page_id=page_id))
-            client.browser.Close(browser_pb2.CloseRequest(browser_id=browser_id))
-
     except grpc.RpcError as e:
         print(f"\nRPC 错误: {e.code()} - {e.details()}")
     finally:
+        # 清理资源（无论是否出错都会执行）
+        if page_id:
+            try:
+                client.page.ClosePage(page_pb2.ClosePageRequest(page_id=page_id))
+                print("页面已关闭")
+            except Exception as e:
+                print(f"关闭页面时出错（已忽略）: {e}")
+
+        if browser_id:
+            try:
+                client.browser.Close(browser_pb2.CloseRequest(browser_id=browser_id))
+                print("浏览器已关闭")
+            except Exception as e:
+                print(f"关闭浏览器时出错（已忽略）: {e}")
+
         client.close()
+        print("客户端连接已关闭")
 
 
 def example_anti_detection():
@@ -491,6 +527,8 @@ def example_anti_detection():
     print("=" * 60)
 
     client = ChaserOxideClient()
+    browser_id = None
+    page_id = None
 
     try:
         # 1. 创建配置并启用所有反检测选项
@@ -670,14 +708,26 @@ def example_anti_detection():
             else:
                 print(f"   需要改进反检测策略")
 
-        # 清理
-        client.page.ClosePage(page_pb2.ClosePageRequest(page_id=page_id))
-        client.browser.Close(browser_pb2.CloseRequest(browser_id=browser_id))
-
     except grpc.RpcError as e:
         print(f"\nRPC 错误: {e.code()} - {e.details()}")
     finally:
+        # 清理资源（无论是否出错都会执行）
+        if page_id:
+            try:
+                client.page.ClosePage(page_pb2.ClosePageRequest(page_id=page_id))
+                print("页面已关闭")
+            except Exception as e:
+                print(f"关闭页面时出错（已忽略）: {e}")
+
+        if browser_id:
+            try:
+                client.browser.Close(browser_pb2.CloseRequest(browser_id=browser_id))
+                print("浏览器已关闭")
+            except Exception as e:
+                print(f"关闭浏览器时出错（已忽略）: {e}")
+
         client.close()
+        print("客户端连接已关闭")
 
 
 def example_profile_presets():

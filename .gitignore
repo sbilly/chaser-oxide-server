@@ -2,7 +2,7 @@
 target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
+# Cargo.lock - 应用程序应提交锁文件确保依赖版本一致
 
 # IDE
 .idea/
@@ -18,6 +18,8 @@ Thumbs.db
 # Environment
 .env
 .env.local
+.env.*
+!.env.example
 
 # Testing
 _testing/
@@ -54,3 +56,7 @@ test-env/
 screenshot*.png
 test_result*.log
 test_client.py
+
+# Browser data (运行时生成)
+data/
+examples/**/*.csv

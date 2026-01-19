@@ -33,16 +33,16 @@ import (
 	// 从生成的 proto 文件导入
 	// 注意：需要先运行 protoc 生成 Go 代码
 	// 请将 your-module-path 替换为您的实际模块路径
-	commonpb "your-module-path/protos"
 	browserpb "your-module-path/protos"
-	pagepb "your-module-path/protos"
+	commonpb "your-module-path/protos"
 	elementpb "your-module-path/protos"
-	profilepb "your-module-path/protos"
 	eventpb "your-module-path/protos"
+	pagepb "your-module-path/protos"
+	profilepb "your-module-path/protos"
 
 	browsergrpc "your-module-path/protos"
-	pagegrpc "your-module-path/protos"
 	elementgrpc "your-module-path/protos"
+	pagegrpc "your-module-path/protos"
 	profilegrpc "your-module-path/protos"
 )
 
@@ -112,15 +112,15 @@ func exampleCustomProfile() {
 			NavigatorProduct: "Gecko",
 		},
 		ProfileOptions: &profilepb.ProfileOptions{
-			InjectNavigator:       true,
-			InjectScreen:          true,
-			InjectWebgl:           true,
-			InjectCanvas:          true,
-			InjectAudio:           true,
+			InjectNavigator:        true,
+			InjectScreen:           true,
+			InjectWebgl:            true,
+			InjectCanvas:           true,
+			InjectAudio:            true,
 			NeutralizeUtilityWorld: true,
-			UseIsolatedWorld:      true,
-			RandomizeMetrics:      true,
-			PreventDetection:      true,
+			UseIsolatedWorld:       true,
+			RandomizeMetrics:       true,
+			PreventDetection:       true,
 		},
 	}
 
@@ -143,7 +143,7 @@ func exampleCustomProfile() {
 	fmt.Println("\n2. 启动浏览器...")
 	launchResp, _ := client.Browser.Launch(ctx, &browserpb.LaunchRequest{
 		Options: &commonpb.BrowserOptions{
-			Headless:   true,
+			Headless:  true,
 			UserAgent: profile.Fingerprint.Headers.UserAgent,
 		},
 	})
@@ -154,6 +154,12 @@ func exampleCustomProfile() {
 		BrowserId: browserID,
 	})
 	pageID := pageResp.PageInfo.PageId
+
+	// 确保资源清理
+	defer func() {
+		_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+	}()
 
 	// 3. 应用指纹配置
 	fmt.Println("\n4. 应用指纹配置...")
@@ -271,10 +277,6 @@ func exampleCustomProfile() {
 			}
 		}
 	}
-
-	// 清理
-	_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
-	_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 }
 
 // exampleHumanBehavior 人类行为模拟示例
@@ -301,6 +303,12 @@ func exampleHumanBehavior() {
 		BrowserId: browserID,
 	})
 	pageID := pageResp.PageInfo.PageId
+
+	// 确保资源清理
+	defer func() {
+		_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+	}()
 
 	// 导航到测试页面
 	fmt.Println("\n1. 导航到测试页面...")
@@ -377,12 +385,12 @@ func exampleHumanBehavior() {
 	fmt.Println("   使用贝塞尔曲线轨迹，速度变化")
 
 	dragReq := &elementpb.DragAndDropRequest{
-		SourceElement:     element,
-		TargetElement:     element,
-		HumanLike:         true,
-		MovementDuration:  800,
-		BezierCurve:       true,
-		RandomPath:        true,
+		SourceElement:    element,
+		TargetElement:    element,
+		HumanLike:        true,
+		MovementDuration: 800,
+		BezierCurve:      true,
+		RandomPath:       true,
 	}
 
 	fmt.Printf("   拖拽持续时间: %dms\n", dragReq.MovementDuration)
@@ -395,10 +403,6 @@ func exampleHumanBehavior() {
 	fmt.Println("   - 速度变化和随机停顿")
 	fmt.Println("   - 模拟人类反应时间")
 	fmt.Println("   - 随机偏移和抖动")
-
-	// 清理
-	_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
-	_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 }
 
 // exampleRandomizedProfiles 随机化指纹配置示例
@@ -486,7 +490,7 @@ func exampleRandomizedProfiles() {
 
 		launchResp, _ := client.Browser.Launch(ctx, &browserpb.LaunchRequest{
 			Options: &commonpb.BrowserOptions{
-				Headless:   true,
+				Headless:  true,
 				UserAgent: profile.Fingerprint.Headers.UserAgent,
 			},
 		})
@@ -497,6 +501,12 @@ func exampleRandomizedProfiles() {
 		})
 		pageID := pageResp.PageInfo.PageId
 
+		// 确保资源清理
+		defer func() {
+			_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+			_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+		}()
+
 		applyResp, err := client.Profile.ApplyProfile(ctx, &profilepb.ApplyProfileRequest{
 			PageId:    pageID,
 			ProfileId: profile.ProfileId,
@@ -505,10 +515,6 @@ func exampleRandomizedProfiles() {
 		if err == nil && applyResp.Error == nil {
 			fmt.Printf("   配置已应用到页面\n")
 		}
-
-		// 清理
-		_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
-		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 	}
 }
 
@@ -539,15 +545,15 @@ func exampleAntiDetection() {
 			DeviceMemory: 16,
 		},
 		ProfileOptions: &profilepb.ProfileOptions{
-			InjectNavigator:       true,
-			InjectScreen:          true,
-			InjectWebgl:           true,
-			InjectCanvas:          true,
-			InjectAudio:           true,
+			InjectNavigator:        true,
+			InjectScreen:           true,
+			InjectWebgl:            true,
+			InjectCanvas:           true,
+			InjectAudio:            true,
 			NeutralizeUtilityWorld: true,
-			UseIsolatedWorld:      true,
-			RandomizeMetrics:      true,
-			PreventDetection:      true,
+			UseIsolatedWorld:       true,
+			RandomizeMetrics:       true,
+			PreventDetection:       true,
 		},
 	}
 
@@ -582,6 +588,12 @@ func exampleAntiDetection() {
 		BrowserId: browserID,
 	})
 	pageID := pageResp.PageInfo.PageId
+
+	// 确保资源清理
+	defer func() {
+		_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+		_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+	}()
 
 	applyResp, err := client.Profile.ApplyProfile(ctx, &profilepb.ApplyProfileRequest{
 		PageId:           pageID,
@@ -704,10 +716,6 @@ func exampleAntiDetection() {
 			}
 		}
 	}
-
-	// 清理
-	_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
-	_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 }
 
 // exampleProfilePresets 预定义配置示例
@@ -797,7 +805,7 @@ func exampleProfilePresets() {
 		if windowsPreset != nil {
 			launchResp, _ := client.Browser.Launch(ctx, &browserpb.LaunchRequest{
 				Options: &commonpb.BrowserOptions{
-					Headless:   true,
+					Headless:  true,
 					UserAgent: windowsPreset.Fingerprint.Headers.UserAgent,
 				},
 			})
@@ -807,6 +815,12 @@ func exampleProfilePresets() {
 				BrowserId: browserID,
 			})
 			pageID := pageResp.PageInfo.PageId
+
+			// 确保资源清理
+			defer func() {
+				_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
+				_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
+			}()
 
 			applyResp, err := client.Profile.ApplyProfile(ctx, &profilepb.ApplyProfileRequest{
 				PageId:    pageID,
@@ -828,10 +842,6 @@ func exampleProfilePresets() {
 				fmt.Printf("   配置类型: %s\n",
 					profilepb.ProfileType_name[int32(activeProfile.Type)])
 			}
-
-			// 清理
-			_, _ = client.Page.ClosePage(ctx, &pagepb.ClosePageRequest{PageId: pageID})
-			_, _ = client.Browser.Close(ctx, &browserpb.CloseRequest{BrowserId: browserID})
 		}
 	}
 }

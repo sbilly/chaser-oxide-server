@@ -48,7 +48,7 @@ pub mod tests;
 pub use traits::{
     CdpConnection, CdpClient, CdpBrowser, CdpEvent, CdpResponse, CdpError,
     NavigationResult, EvaluationResult, ScreenshotFormat,
-    BrowserVersion, TargetInfo,
+    BrowserVersion, TargetInfo, BrowserContextInfo,
 };
 
 // Re-export implementation structs

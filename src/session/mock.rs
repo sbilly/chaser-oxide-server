@@ -1,6 +1,6 @@
-//! Mock session implementation for testing
+//! Mock implementations for testing
 //!
-//! This module provides mock implementations of session traits for development and testing.
+//! This module provides mock implementations of session management traits for testing purposes.
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -8,18 +8,17 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use super::traits::{
-    BrowserContext, BrowserOptions, PageContext, PageOptions, ElementRef,
-    NavigationOptions, NavigationResult, EvaluationResult, BoundingBox,
-    ScreenshotOptions, SessionManager,
+use crate::cdp::traits::CdpClient;
+use crate::session::traits::{
+    BrowserContext, BrowserContextInfo, BrowserOptions, ElementRef, PageContext, PageOptions,
+    NavigationOptions, NavigationResult, EvaluationResult, BoundingBox, ScreenshotOptions,
 };
-use crate::Error;
 
 /// Mock session manager
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MockSessionManager {
     browsers: Arc<RwLock<HashMap<String, Arc<MockBrowser>>>>,
-    pages: Arc<RwLock<HashMap<String, Arc<dyn PageContext>>>>,
+    pages: Arc<RwLock<HashMap<String, Arc<MockPage>>>>,
 }
 
 impl MockSessionManager {
@@ -31,18 +30,15 @@ impl MockSessionManager {
         }
     }
 
-    /// Register a browser
-    pub async fn register_browser(&self, browser: Arc<MockBrowser>) -> String {
+    /// Add a browser to this manager
+    pub async fn add_browser(&self, browser: Arc<MockBrowser>) {
         let id = browser.id().to_string();
-        self.browsers.write().await.insert(id.clone(), browser);
-        id
+        self.browsers.write().await.insert(id, browser);
     }
 
-    /// Register a page
-    pub async fn register_page(&self, page: Arc<MockPage>) -> String {
-        let id = page.id().to_string();
-        self.pages.write().await.insert(id.clone(), page);
-        id
+    /// Get browser count
+    pub async fn browser_count(&self) -> usize {
+        self.browsers.read().await.len()
     }
 }
 
@@ -53,33 +49,32 @@ impl Default for MockSessionManager {
 }
 
 #[async_trait]
-impl SessionManager for MockSessionManager {
+impl crate::session::traits::SessionManager for MockSessionManager {
     async fn create_browser(&self, options: BrowserOptions) -> Result<String, crate::Error> {
         let browser = Arc::new(MockBrowser::new(options));
-        let id = self.register_browser(browser).await;
+        let id = browser.id().to_string();
+        self.add_browser(browser).await;
         Ok(id)
     }
 
     async fn get_browser(&self, browser_id: &str) -> Result<Arc<dyn BrowserContext>, crate::Error> {
-        self.browsers
-            .read()
-            .await
+        let browsers = self.browsers.read().await;
+        browsers
             .get(browser_id)
             .map(|b| b.clone() as Arc<dyn BrowserContext>)
-            .ok_or_else(|| crate::Error::BrowserNotFound(browser_id.to_string()))
+            .ok_or_else(|| crate::Error::browser_not_found(browser_id))
     }
 
     async fn close_browser(&self, browser_id: &str) -> Result<(), crate::Error> {
-        self.browsers
-            .write()
-            .await
-            .remove(browser_id)
-            .ok_or_else(|| crate::Error::BrowserNotFound(browser_id.to_string()))?;
+        let browser = self.get_browser(browser_id).await?;
+        browser.close().await?;
+        self.browsers.write().await.remove(browser_id);
         Ok(())
     }
 
     async fn list_browsers(&self) -> Result<Vec<String>, crate::Error> {
-        Ok(self.browsers.read().await.keys().cloned().collect())
+        let browsers = self.browsers.read().await;
+        Ok(browsers.keys().cloned().collect())
     }
 
     async fn create_page(
@@ -88,43 +83,33 @@ impl SessionManager for MockSessionManager {
         options: PageOptions,
     ) -> Result<Arc<dyn PageContext>, crate::Error> {
         let browser = self.get_browser(browser_id).await?;
-        let page = browser.create_page(options).await?;
-        let page_id = page.id().to_string();
-        self.pages.write().await.insert(page_id.clone(), page.clone());
-        Ok(page)
+        browser.create_page(options).await
     }
 
     async fn get_page(&self, page_id: &str) -> Result<Arc<dyn PageContext>, crate::Error> {
-        self.pages
-            .read()
-            .await
+        let pages = self.pages.read().await;
+        pages
             .get(page_id)
-            .cloned()
-            .ok_or_else(|| crate::Error::PageNotFound(page_id.to_string()))
+            .map(|p| p.clone() as Arc<dyn PageContext>)
+            .ok_or_else(|| crate::Error::page_not_found(page_id))
     }
 
     async fn close_page(&self, page_id: &str) -> Result<(), crate::Error> {
-        self.pages
-            .write()
-            .await
-            .remove(page_id)
-            .ok_or_else(|| crate::Error::PageNotFound(page_id.to_string()))?;
+        let page = self.get_page(page_id).await?;
+        page.close().await?;
+        self.pages.write().await.remove(page_id);
         Ok(())
     }
 
     async fn cleanup(&self) -> Result<(), crate::Error> {
-        // Remove inactive browsers
-        let mut browsers = self.browsers.write().await;
-        browsers.retain(|_, b| b.is_active());
         Ok(())
     }
 
     fn session_count(&self) -> usize {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.browsers.read().await.len()
-            })
-        })
+        self.browsers
+            .try_read()
+            .map(|b| b.len())
+            .unwrap_or(0)
     }
 }
 
@@ -132,11 +117,11 @@ impl SessionManager for MockSessionManager {
 #[derive(Debug)]
 pub struct MockBrowser {
     id: String,
-    #[allow(dead_code)]
     options: BrowserOptions,
     pages: Arc<RwLock<Vec<Arc<MockPage>>>>,
     is_active: Arc<RwLock<bool>>,
     created_at: std::time::Instant,
+    incognito_contexts: Arc<RwLock<HashMap<String, BrowserContextInfo>>>,
 }
 
 impl MockBrowser {
@@ -148,6 +133,7 @@ impl MockBrowser {
             pages: Arc::new(RwLock::new(Vec::new())),
             is_active: Arc::new(RwLock::new(true)),
             created_at: std::time::Instant::now(),
+            incognito_contexts: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -173,7 +159,7 @@ impl BrowserContext for MockBrowser {
         &self.id
     }
 
-    async fn create_page(&self, options: PageOptions) -> Result<Arc<dyn PageContext>, Error> {
+    async fn create_page(&self, options: PageOptions) -> Result<Arc<dyn PageContext>, crate::Error> {
         let page = Arc::new(MockPage::new(
             self.id.clone(),
             options,
@@ -182,12 +168,12 @@ impl BrowserContext for MockBrowser {
         Ok(page)
     }
 
-    async fn get_pages(&self) -> Result<Vec<Arc<dyn PageContext>>, Error> {
+    async fn get_pages(&self) -> Result<Vec<Arc<dyn PageContext>>, crate::Error> {
         let pages = self.pages.read().await;
         Ok(pages.iter().map(|p| p.clone() as Arc<dyn PageContext>).collect())
     }
 
-    async fn close(&self) -> Result<(), Error> {
+    async fn close(&self) -> Result<(), crate::Error> {
         *self.is_active.write().await = false;
         Ok(())
     }
@@ -199,6 +185,43 @@ impl BrowserContext for MockBrowser {
             .ok()
             .map(|active| *active)
             .unwrap_or(false)
+    }
+
+    async fn create_incognito_context(&self) -> Result<BrowserContextInfo, crate::Error> {
+        let context_id = Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().timestamp();
+
+        let context_info = BrowserContextInfo {
+            context_id: context_id.clone(),
+            browser_id: self.id.clone(),
+            is_incognito: true,
+            created_at,
+        };
+
+        self.incognito_contexts
+            .write()
+            .await
+            .insert(context_id.clone(), context_info.clone());
+
+        Ok(context_info)
+    }
+
+    async fn close_incognito_context(&self, context_id: &str) -> Result<(), crate::Error> {
+        let removed = self.incognito_contexts.write().await.remove(context_id);
+
+        if removed.is_some() {
+            Ok(())
+        } else {
+            Err(crate::Error::browser_not_found(&format!(
+                "Incognito context {} not found",
+                context_id
+            )))
+        }
+    }
+
+    async fn get_contexts(&self) -> Result<Vec<BrowserContextInfo>, crate::Error> {
+        let contexts = self.incognito_contexts.read().await.values().cloned().collect();
+        Ok(contexts)
     }
 }
 
@@ -259,7 +282,7 @@ impl PageContext for MockPage {
         &self.browser_id
     }
 
-    async fn navigate(&self, url: &str, _options: NavigationOptions) -> Result<NavigationResult, Error> {
+    async fn navigate(&self, url: &str, _options: NavigationOptions) -> Result<NavigationResult, crate::Error> {
         *self.url.write().await = url.to_string();
         Ok(NavigationResult {
             url: url.to_string(),
@@ -268,71 +291,51 @@ impl PageContext for MockPage {
         })
     }
 
-    async fn get_content(&self) -> Result<String, Error> {
+    async fn get_content(&self) -> Result<String, crate::Error> {
         Ok(self.content.read().await.clone())
     }
 
-    async fn set_content(&self, html: &str) -> Result<(), Error> {
+    async fn set_content(&self, html: &str) -> Result<(), crate::Error> {
         *self.content.write().await = html.to_string();
         Ok(())
     }
 
-    async fn reload(&self, _ignore_cache: bool) -> Result<(), Error> {
+    async fn reload(&self, _ignore_cache: bool) -> Result<(), crate::Error> {
         Ok(())
     }
 
-    async fn go_back(&self) -> Result<(), Error> {
+    async fn go_back(&self) -> Result<(), crate::Error> {
         Ok(())
     }
 
-    async fn go_forward(&self) -> Result<(), Error> {
+    async fn go_forward(&self) -> Result<(), crate::Error> {
         Ok(())
     }
 
-    async fn evaluate(&self, script: &str, _await_promise: bool) -> Result<EvaluationResult, Error> {
-        // Simple mock: handle basic cases for testing
-        if script == "document.title" {
-            Ok(EvaluationResult::String("Test Page".to_string()))
-        } else if script.contains("+") {
-            // Simple arithmetic evaluation
-            let parts: Vec<&str> = script.split('+').collect();
-            if parts.len() == 2 {
-                let a: f64 = parts[0].trim().parse().unwrap_or(0.0);
-                let b: f64 = parts[1].trim().parse().unwrap_or(0.0);
-                Ok(EvaluationResult::Number(a + b))
-            } else {
-                Ok(EvaluationResult::String(script.to_string()))
-            }
+    async fn evaluate(&self, script: &str, _await_promise: bool) -> Result<EvaluationResult, crate::Error> {
+        // Simple mock implementation
+        if script.contains("return") {
+            Ok(EvaluationResult::String("mock result".to_string()))
         } else {
-            Ok(EvaluationResult::String(script.to_string()))
+            Ok(EvaluationResult::Null)
         }
     }
 
-    async fn screenshot(&self, _options: ScreenshotOptions) -> Result<Vec<u8>, Error> {
-        // Return a minimal 1x1 PNG
-        Ok(vec![
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-            0x00, 0x00, 0x00, 0x0D, // IHDR length
-            0x49, 0x48, 0x44, 0x52, // IHDR
-            0x00, 0x00, 0x00, 0x01, // Width: 1
-            0x00, 0x00, 0x00, 0x01, // Height: 1
-            0x08, 0x02, 0x00, 0x00, 0x00, // Bit depth: 8, Color type: 2 (RGB)
-            0x90, 0x77, 0x53, 0xDE, // CRC
-        ])
+    async fn screenshot(&self, _options: ScreenshotOptions) -> Result<Vec<u8>, crate::Error> {
+        Ok(vec![1, 2, 3, 4]) // Mock screenshot data
     }
 
-    async fn set_viewport(&self, width: u32, height: u32, device_scale_factor: f64) -> Result<(), Error> {
+    async fn set_viewport(&self, width: u32, height: u32, device_scale_factor: f64) -> Result<(), crate::Error> {
         *self.viewport.write().await = (width, height, device_scale_factor);
         Ok(())
     }
 
-    async fn close(&self) -> Result<(), Error> {
+    async fn close(&self) -> Result<(), crate::Error> {
         *self.is_active.write().await = false;
         Ok(())
     }
 
     fn is_active(&self) -> bool {
-        // Use try_read to avoid blocking in sync context
         self.is_active
             .try_read()
             .ok()
@@ -350,18 +353,20 @@ impl PageContext for MockPage {
 pub struct MockElement {
     id: String,
     page_id: String,
-    tag_name: String,
-    text_content: Option<String>,
+    text: Arc<RwLock<String>>,
+    is_visible: Arc<RwLock<bool>>,
+    is_enabled: Arc<RwLock<bool>>,
 }
 
 impl MockElement {
     /// Create a new mock element
-    pub fn new(page_id: String, tag_name: String, text_content: Option<String>) -> Self {
+    pub fn new(page_id: String, text: String) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             page_id,
-            tag_name,
-            text_content,
+            text: Arc::new(RwLock::new(text)),
+            is_visible: Arc::new(RwLock::new(true)),
+            is_enabled: Arc::new(RwLock::new(true)),
         }
     }
 }
@@ -376,47 +381,48 @@ impl ElementRef for MockElement {
         &self.page_id
     }
 
-    async fn get_text(&self) -> Result<String, Error> {
-        Ok(self.text_content.clone().unwrap_or_default())
+    async fn get_text(&self) -> Result<String, crate::Error> {
+        Ok(self.text.read().await.clone())
     }
 
-    async fn get_html(&self) -> Result<String, Error> {
-        Ok(format!("<{}></{}>", self.tag_name, self.tag_name))
+    async fn get_html(&self) -> Result<String, crate::Error> {
+        let text = self.text.read().await.clone();
+        Ok(format!("<div>{}</div>", text))
     }
 
-    async fn get_attribute(&self, _name: &str) -> Result<Option<String>, Error> {
+    async fn get_attribute(&self, _name: &str) -> Result<Option<String>, crate::Error> {
         Ok(None)
     }
 
-    async fn click(&self) -> Result<(), Error> {
+    async fn click(&self) -> Result<(), crate::Error> {
         Ok(())
     }
 
-    async fn type_text(&self, _text: &str) -> Result<(), Error> {
+    async fn type_text(&self, _text: &str) -> Result<(), crate::Error> {
         Ok(())
     }
 
-    async fn focus(&self) -> Result<(), Error> {
+    async fn focus(&self) -> Result<(), crate::Error> {
         Ok(())
     }
 
-    async fn hover(&self) -> Result<(), Error> {
+    async fn hover(&self) -> Result<(), crate::Error> {
         Ok(())
     }
 
-    async fn scroll_into_view(&self) -> Result<(), Error> {
+    async fn scroll_into_view(&self) -> Result<(), crate::Error> {
         Ok(())
     }
 
-    async fn is_visible(&self) -> Result<bool, Error> {
-        Ok(true)
+    async fn is_visible(&self) -> Result<bool, crate::Error> {
+        Ok(*self.is_visible.read().await)
     }
 
-    async fn is_enabled(&self) -> Result<bool, Error> {
-        Ok(true)
+    async fn is_enabled(&self) -> Result<bool, crate::Error> {
+        Ok(*self.is_enabled.read().await)
     }
 
-    async fn get_bounding_box(&self) -> Result<BoundingBox, Error> {
+    async fn get_bounding_box(&self) -> Result<BoundingBox, crate::Error> {
         Ok(BoundingBox {
             x: 0.0,
             y: 0.0,
@@ -429,64 +435,89 @@ impl ElementRef for MockElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::traits::SessionManager;
+
+    #[tokio::test]
+    async fn test_mock_session_manager() {
+        let manager = MockSessionManager::new();
+
+        // Create browser
+        let browser_id = manager
+            .create_browser(BrowserOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(manager.browser_count().await, 1);
+
+        // Get browser
+        let browser = manager.get_browser(&browser_id).await.unwrap();
+        assert_eq!(browser.id(), browser_id);
+
+        // Create page
+        let page = browser
+            .create_page(PageOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(page.browser_id(), browser_id);
+
+        // Close browser
+        manager.close_browser(&browser_id).await.unwrap();
+        assert_eq!(manager.browser_count().await, 0);
+    }
 
     #[tokio::test]
     async fn test_mock_browser() {
-        let options = BrowserOptions::default();
-        let browser = MockBrowser::new(options);
+        let browser = MockBrowser::new(BrowserOptions::default());
 
-        assert!(!browser.id().is_empty());
-        assert!(browser.is_active());
+        // Create page
+        let page = browser.create_page(PageOptions::default()).await.unwrap();
+        assert_eq!(page.browser_id(), browser.id());
 
+        // Get pages
         let pages = browser.get_pages().await.unwrap();
-        assert_eq!(pages.len(), 0);
+        assert_eq!(pages.len(), 1);
 
+        // Close
         browser.close().await.unwrap();
         assert!(!browser.is_active());
     }
 
     #[tokio::test]
     async fn test_mock_page() {
-        let browser_id = "test-browser".to_string();
-        let options = PageOptions::default();
-        let page = MockPage::new(browser_id, options);
+        let page = MockPage::new("test-browser".to_string(), PageOptions::default());
 
-        assert!(!page.id().is_empty());
-        assert_eq!(page.browser_id(), "test-browser");
-        assert!(page.is_active());
-
-        // Test navigation
-        let result = page.navigate("https://example.com", NavigationOptions {
-            timeout: 30000,
-            wait_until: super::super::traits::LoadState::Load,
-        }).await.unwrap();
+        // Navigate
+        let result = page
+            .navigate("https://example.com", NavigationOptions::default())
+            .await
+            .unwrap();
         assert_eq!(result.url, "https://example.com");
 
-        // Test content
-        page.set_content("<html><body>Test</body></html>").await.unwrap();
+        // Content
+        page.set_content("Hello").await.unwrap();
         let content = page.get_content().await.unwrap();
-        assert!(content.contains("Test"));
+        assert_eq!(content, "Hello");
 
-        // Test close
+        // Close
         page.close().await.unwrap();
         assert!(!page.is_active());
     }
 
     #[tokio::test]
-    async fn test_mock_element() {
-        let page_id = "test-page".to_string();
-        let element = MockElement::new(page_id, "div".to_string(), Some("Test text".to_string()));
+    async fn test_incognito_context() {
+        let browser = MockBrowser::new(BrowserOptions::default());
 
-        assert!(!element.id().is_empty());
-        assert_eq!(element.page_id(), "test-page");
+        // Create incognito context
+        let context = browser.create_incognito_context().await.unwrap();
+        assert!(context.is_incognito);
+        assert_eq!(context.browser_id, browser.id());
 
-        let text = element.get_text().await.unwrap();
-        assert_eq!(text, "Test text");
+        // List contexts
+        let contexts = browser.get_contexts().await.unwrap();
+        assert_eq!(contexts.len(), 1);
 
-        let html = element.get_html().await.unwrap();
-        assert_eq!(html, "<div></div>");
-
-        let bbox = element.get_bounding_box().await.unwrap();
-        assert_eq!(bbox.width, 100.0);
+        // Close context
+        browser.close_incognito_context(&context.context_id).await.unwrap();
+        let contexts = browser.get_contexts().await.unwrap();
+        assert_eq!(contexts.len(), 0);
     }
 }
